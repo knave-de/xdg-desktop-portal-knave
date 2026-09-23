@@ -218,6 +218,8 @@ pub struct DataControlState {
     current_offer: Option<DataControlOffer>,
     /// The data source we created for SetSelection (if any).
     current_source: Option<DataControlSource>,
+    /// MIME types advertised on `current_source`.
+    current_source_mime_types: Vec<String>,
     /// Data cached for our source's `send` events.
     source_data: HashMap<String, Vec<u8>>,
     /// Pending offer being built up (between data_offer and selection events).
@@ -233,6 +235,7 @@ impl Default for DataControlState {
             device: None,
             current_offer: None,
             current_source: None,
+            current_source_mime_types: Vec::new(),
             source_data: HashMap::new(),
             pending_offer: None,
             shared_state: Arc::new(Mutex::new(SharedClipboardState::default())),
@@ -310,17 +313,25 @@ impl DataControlState {
             Vec::new()
         };
 
+        // The device reports every selection, our own included. Reporting
+        // our own back as a change makes the consumer treat it as another
+        // client's copy.
+        let own = is_own_selection(
+            self.current_source.is_some(),
+            &self.current_source_mime_types,
+            &mime_types,
+        );
         tracing::debug!(
             mime_types = ?mime_types,
+            own,
             "Compositor selection changed"
         );
 
-        // Update shared state and notify
         if let Ok(mut shared) = self.shared_state.lock() {
             shared.serial += 1;
             shared.mime_types.clone_from(&mime_types);
 
-            if let Some(ref callback) = shared.on_change {
+            if !own && let Some(ref callback) = shared.on_change {
                 callback(mime_types);
             }
         }
@@ -407,6 +418,7 @@ impl DataControlState {
         if let Some(source) = self.current_source.take() {
             source.destroy();
         }
+        self.current_source_mime_types.clear();
         self.source_data.clear();
     }
 
@@ -426,6 +438,7 @@ impl DataControlState {
         if let Some(source) = self.current_source.take() {
             source.destroy();
         }
+        self.current_source_mime_types.clear();
         self.source_data.clear();
     }
 
@@ -486,6 +499,7 @@ impl DataControlState {
 
         self.source_data = data;
         self.current_source = Some(new_source);
+        self.current_source_mime_types = mime_types.to_vec();
     }
 
     /// Process a ReceiveFromOffer command.
@@ -508,6 +522,19 @@ impl DataControlState {
             }
         }
     }
+}
+
+/// Whether a selection event reports the selection this client set itself.
+///
+/// Another client taking the selection cancels our source first, so while
+/// our source is live the selection is still ours. The offered MIME set must
+/// also match what we advertised: that keeps a foreign copy from being
+/// swallowed on a compositor that delivers the selection before the cancel.
+fn is_own_selection(source_live: bool, advertised: &[String], offered: &[String]) -> bool {
+    if !source_live || advertised.len() != offered.len() {
+        return false;
+    }
+    offered.iter().all(|mime| advertised.contains(mime))
 }
 
 /// Convert an OwnedFd to a File, taking ownership.
@@ -549,6 +576,53 @@ mod tests {
         assert!(state.current_source.is_none());
         assert!(state.source_data.is_empty());
         assert!(state.pending_offer.is_none());
+    }
+
+    fn mimes(types: &[&str]) -> Vec<String> {
+        types.iter().map(|t| (*t).to_string()).collect()
+    }
+
+    #[test]
+    fn own_selection_is_recognised_while_our_source_is_live() {
+        let ours = mimes(&["text/plain;charset=utf-8"]);
+        assert!(is_own_selection(
+            true,
+            &ours,
+            &mimes(&["text/plain;charset=utf-8"])
+        ));
+    }
+
+    #[test]
+    fn a_selection_after_our_source_was_cancelled_is_foreign() {
+        let ours = mimes(&["text/plain;charset=utf-8"]);
+        assert!(!is_own_selection(
+            false,
+            &ours,
+            &mimes(&["text/plain;charset=utf-8"])
+        ));
+    }
+
+    #[test]
+    fn a_different_offer_while_our_source_is_live_is_foreign() {
+        let ours = mimes(&["text/plain;charset=utf-8"]);
+        let wl_copy = mimes(&[
+            "text/plain;charset=utf-8",
+            "text/plain",
+            "TEXT",
+            "STRING",
+            "UTF8_STRING",
+        ]);
+        assert!(!is_own_selection(true, &ours, &wl_copy));
+    }
+
+    #[test]
+    fn own_selection_ignores_offer_order() {
+        let ours = mimes(&["image/png", "text/html"]);
+        assert!(is_own_selection(
+            true,
+            &ours,
+            &mimes(&["text/html", "image/png"])
+        ));
     }
 
     #[test]
