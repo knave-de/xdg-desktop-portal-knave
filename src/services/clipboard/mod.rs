@@ -125,10 +125,27 @@ pub trait ClipboardBackend: Send + Sync {
     /// Inserts data into the source cache without re-creating the Wayland
     /// data source. Used when data wasn't available at announcement time
     /// (e.g., eager fetch from a remote clipboard over RDP).
-    ///
-    /// The Wayland `send` event requires data synchronously, so this must
-    /// be called before the compositor requests the data.
     fn update_source_data(&mut self, mime_type: &str, data: Vec<u8>) -> Result<()>;
+
+    /// Register a callback for pastes of advertised MIME types that have no
+    /// data yet (delayed rendering).
+    ///
+    /// The paste is held open and the callback gets a serial and the MIME
+    /// type; answer it with [`complete_transfer`](Self::complete_transfer).
+    /// Without a callback such pastes get no data.
+    fn on_transfer_requested(&mut self, _callback: Box<dyn Fn(u32, String) + Send + Sync>) {}
+
+    /// Answer a paste raised through `on_transfer_requested`. `None` closes
+    /// the waiting pastes with no data.
+    fn complete_transfer(&mut self, _serial: u32, _data: Option<Vec<u8>>) -> Result<()> {
+        Ok(())
+    }
+
+    /// Give up our selection if we still own it (the remote that supplied it
+    /// has gone).
+    fn clear_selection(&mut self) -> Result<()> {
+        Ok(())
+    }
 
     /// Set the health event sender for clipboard metrics reporting.
     ///

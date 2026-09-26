@@ -5,6 +5,30 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **Delayed rendering for data-control clipboard sources.** A paste of an
+  advertised MIME type with no cached data no longer gets an empty pipe
+  when a consumer registered `ClipboardBackend::on_transfer_requested`: the
+  paste is held, the callback receives a serial and the MIME type, and
+  `ClipboardBackend::complete_transfer` writes the answer to every paste
+  waiting on that type and caches it for later ones. Data-control puts no
+  deadline on the `send` fd, so a remote-desktop server can fetch data from
+  its client only when something pastes it. Without a callback the old
+  behaviour is unchanged. `ClipboardBackend::clear_selection` gives up our
+  selection when the remote that supplied it has gone.
+
+### Fixed
+
+- **Setting the clipboard no longer empties it for a moment.** The old
+  source was destroyed before the new one became the selection; Klipper's
+  "prevent empty clipboard" answered the gap by re-offering its last history
+  item. The new source now replaces the old one first.
+- **A large paste no longer blocks the Wayland event loop.** Source data is
+  written to the requesting fd on a worker thread.
+
 ## [0.9.0] - 2026-09-10
 
 ### Fixed

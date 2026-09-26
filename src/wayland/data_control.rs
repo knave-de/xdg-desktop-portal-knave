@@ -174,6 +174,19 @@ pub enum ClipboardCommand {
         /// Write end of the pipe (compositor writes data here).
         fd: OwnedFd,
     },
+    /// Answer a transfer raised through `SharedClipboardState::on_transfer`.
+    ///
+    /// Writes `data` to every paste waiting on that transfer and caches it
+    /// for later pastes of the same MIME type. `None` closes the waiting
+    /// pastes with no data.
+    CompleteTransfer {
+        /// Serial passed to the `on_transfer` callback.
+        serial: u32,
+        /// The data, or `None` if the remote could not supply it.
+        data: Option<Vec<u8>>,
+    },
+    /// Give up our selection, if we still own it.
+    ClearSelection,
 }
 
 /// Shared clipboard state readable from any thread.
@@ -191,9 +204,23 @@ pub struct SharedClipboardState {
     /// Called on the event loop thread when selection changes.
     /// Typically captures a tokio channel sender for async notification.
     pub on_change: Option<Arc<dyn Fn(Vec<String>) + Send + Sync>>,
+    /// Paste callback for data not supplied up front.
+    ///
+    /// When set, a paste of an advertised MIME type with no cached data is
+    /// held open and this is called with a serial and the MIME type; the
+    /// answer comes back as `ClipboardCommand::CompleteTransfer`. Without
+    /// it such a paste gets no data.
+    pub on_transfer: Option<Arc<dyn Fn(u32, String) + Send + Sync>>,
 }
 
 // === Data control state ===
+
+/// A paste waiting on data from `on_transfer`, with every paste of the same
+/// MIME type that arrived meanwhile.
+struct PendingTransfer {
+    serial: u32,
+    waiters: Vec<OwnedFd>,
+}
 
 /// Accumulated MIME types for a pending data offer.
 ///
@@ -224,6 +251,10 @@ pub struct DataControlState {
     source_data: HashMap<String, Vec<u8>>,
     /// Pending offer being built up (between data_offer and selection events).
     pending_offer: Option<(DataControlOffer, PendingOffer)>,
+    /// Pastes waiting on `on_transfer`, by requested MIME type.
+    pending_transfers: HashMap<String, PendingTransfer>,
+    /// Next serial handed to `on_transfer`.
+    next_transfer_serial: u32,
     /// Shared clipboard state for cross-thread access.
     pub shared_state: Arc<Mutex<SharedClipboardState>>,
 }
@@ -238,6 +269,8 @@ impl Default for DataControlState {
             current_source_mime_types: Vec::new(),
             source_data: HashMap::new(),
             pending_offer: None,
+            pending_transfers: HashMap::new(),
+            next_transfer_serial: 1,
             shared_state: Arc::new(Mutex::new(SharedClipboardState::default())),
         }
     }
@@ -377,37 +410,107 @@ impl DataControlState {
     /// Handle a `send` event on our data source.
     ///
     /// The compositor (or another client pasting) wants data in the
-    /// specified MIME type. Write it to the provided fd.
-    pub fn on_source_send(&self, mime_type: &str, fd: OwnedFd) {
-        use std::io::Write;
+    /// specified MIME type. Cached data is written at once; otherwise, with
+    /// an `on_transfer` callback set, the paste is held until the data
+    /// arrives through `CompleteTransfer`.
+    pub fn on_source_send(&mut self, mime_type: &str, fd: OwnedFd) {
+        if let Some(data) = self.cached_data(mime_type) {
+            write_in_background(fd, data);
+            return;
+        }
 
-        // Try exact match first, then fall back to base MIME type without
-        // parameters (e.g., "text/plain;charset=utf-8" → "text/plain").
-        // Compositors commonly request charset variants of text MIME types.
-        let data = self.source_data.get(mime_type).or_else(|| {
-            let base = mime_type.split(';').next()?.trim();
-            tracing::debug!(
-                requested = mime_type,
-                matched = base,
-                "MIME charset fallback"
-            );
-            self.source_data.get(base)
-        });
+        if let Some(pending) = self.pending_transfers.get_mut(mime_type) {
+            pending.waiters.push(fd);
+            return;
+        }
 
-        if let Some(data) = data {
-            let mut file = fd_to_file(fd);
-            if let Err(e) = file.write_all(data) {
-                tracing::error!(
-                    mime_type,
-                    error = %e,
-                    "Failed to write clipboard data for send event"
-                );
-            }
-            // File (and fd) is dropped/closed here
-        } else {
+        let on_transfer = self
+            .shared_state
+            .lock()
+            .ok()
+            .and_then(|shared| shared.on_transfer.clone());
+        let advertised = self
+            .current_source_mime_types
+            .iter()
+            .any(|m| m == mime_type);
+        let (Some(on_transfer), true) = (on_transfer, advertised) else {
             tracing::warn!(mime_type, "Source send event for unknown MIME type");
             // fd is dropped/closed here, signaling no data
+            return;
+        };
+
+        let serial = self.next_transfer_serial;
+        self.next_transfer_serial = self.next_transfer_serial.wrapping_add(1);
+        self.pending_transfers.insert(
+            mime_type.to_string(),
+            PendingTransfer {
+                serial,
+                waiters: vec![fd],
+            },
+        );
+        tracing::debug!(mime_type, serial, "Paste held until its data arrives");
+        on_transfer(serial, mime_type.to_string());
+    }
+
+    /// Data cached for `mime_type`, tolerating a charset parameter
+    /// (compositors commonly request `text/plain;charset=utf-8` for
+    /// `text/plain`).
+    fn cached_data(&self, mime_type: &str) -> Option<Arc<Vec<u8>>> {
+        self.source_data
+            .get(mime_type)
+            .or_else(|| {
+                let base = mime_type.split(';').next()?.trim();
+                self.source_data.get(base)
+            })
+            .map(|data| Arc::new(data.clone()))
+    }
+
+    /// Process a CompleteTransfer command.
+    pub fn complete_transfer(&mut self, serial: u32, data: Option<Vec<u8>>) {
+        let Some(mime_type) = self
+            .pending_transfers
+            .iter()
+            .find(|(_, pending)| pending.serial == serial)
+            .map(|(mime, _)| mime.clone())
+        else {
+            tracing::debug!(serial, "Transfer answered after its selection was replaced");
+            return;
+        };
+        let Some(pending) = self.pending_transfers.remove(&mime_type) else {
+            return;
+        };
+        let Some(data) = data.filter(|d| !d.is_empty()) else {
+            tracing::debug!(
+                mime_type,
+                waiters = pending.waiters.len(),
+                "Transfer returned no data"
+            );
+            return;
+        };
+        let shared = Arc::new(data);
+        for fd in pending.waiters {
+            write_in_background(fd, Arc::clone(&shared));
         }
+        self.source_data
+            .insert(mime_type, Arc::unwrap_or_clone(shared));
+    }
+
+    /// Process a ClearSelection command: give up our selection if the
+    /// compositor still has it.
+    pub fn clear_selection(&mut self) {
+        let Some(source) = self.current_source.take() else {
+            return;
+        };
+        match &self.device {
+            Some(DataControlDevice::Ext(dev)) => dev.set_selection(None),
+            Some(DataControlDevice::Wlr(dev)) => dev.set_selection(None),
+            None => {}
+        }
+        source.destroy();
+        self.current_source_mime_types.clear();
+        self.source_data.clear();
+        self.pending_transfers.clear();
+        tracing::debug!("Released our clipboard selection");
     }
 
     /// Handle the `cancelled` event on our data source.
@@ -420,6 +523,8 @@ impl DataControlState {
         }
         self.current_source_mime_types.clear();
         self.source_data.clear();
+        // Waiting pastes see end-of-file.
+        self.pending_transfers.clear();
     }
 
     /// Handle the `finished` event on the device.
@@ -440,6 +545,7 @@ impl DataControlState {
         }
         self.current_source_mime_types.clear();
         self.source_data.clear();
+        self.pending_transfers.clear();
     }
 
     /// Process a SetSelection command.
@@ -452,11 +558,6 @@ impl DataControlState {
         data: HashMap<String, Vec<u8>>,
         qh: &QueueHandle<WaylandState>,
     ) {
-        // Destroy previous source
-        if let Some(source) = self.current_source.take() {
-            source.destroy();
-        }
-
         let new_source = match &self.manager {
             Some(DataControlManager::Ext(mgr)) => {
                 DataControlSource::Ext(mgr.create_data_source(qh, ()))
@@ -497,6 +598,14 @@ impl DataControlState {
             "Set clipboard selection on compositor"
         );
 
+        // Replace, then destroy: destroying the current source first would
+        // leave the clipboard empty for a moment, which clipboard managers
+        // (Klipper's "prevent empty clipboard") answer by re-offering their
+        // last history item.
+        if let Some(old) = self.current_source.take() {
+            old.destroy();
+        }
+        self.pending_transfers.clear();
         self.source_data = data;
         self.current_source = Some(new_source);
         self.current_source_mime_types = mime_types.to_vec();
@@ -537,16 +646,22 @@ fn is_own_selection(source_live: bool, advertised: &[String], offered: &[String]
     offered.iter().all(|mime| advertised.contains(mime))
 }
 
-/// Convert an OwnedFd to a File, taking ownership.
-#[expect(
-    unsafe_code,
-    reason = "from_raw_fd requires unsafe to take ownership of the file descriptor"
-)]
-fn fd_to_file(fd: OwnedFd) -> std::fs::File {
-    use std::os::unix::io::{AsRawFd, FromRawFd};
-    let file = unsafe { std::fs::File::from_raw_fd(fd.as_raw_fd()) };
-    std::mem::forget(fd);
-    file
+/// Answer a paste on a worker thread: a large image written into a slow
+/// reader would otherwise block every other Wayland event.
+fn write_in_background(fd: OwnedFd, data: Arc<Vec<u8>>) {
+    use std::io::Write;
+
+    let spawned = std::thread::Builder::new()
+        .name("data-control-send".into())
+        .spawn(move || {
+            let mut file = std::fs::File::from(fd);
+            if let Err(e) = file.write_all(&data) {
+                tracing::debug!(error = %e, "Paste reader went away");
+            }
+        });
+    if let Err(e) = spawned {
+        tracing::error!(error = %e, "Failed to start a paste writer");
+    }
 }
 
 #[cfg(test)]
@@ -683,7 +798,7 @@ mod tests {
 
     #[test]
     fn test_on_source_send_unknown_mime() {
-        let state = DataControlState::default();
+        let mut state = DataControlState::default();
         // Should not panic for unknown MIME type
         let (read_fd, write_fd) = nix::unistd::pipe().unwrap();
         std::mem::forget(read_fd); // leak the read end for the test
@@ -715,5 +830,74 @@ mod tests {
         let mut buf = Vec::new();
         file.read_to_end(&mut buf).unwrap();
         assert_eq!(buf, b"hello world");
+    }
+
+    fn read_all(fd: OwnedFd) -> Vec<u8> {
+        use std::io::Read;
+        let mut buf = Vec::new();
+        std::fs::File::from(fd).read_to_end(&mut buf).unwrap();
+        buf
+    }
+
+    type TransferLog = Arc<Mutex<Vec<(u32, String)>>>;
+
+    /// State advertising `image/png` with a transfer callback that records
+    /// what it was asked for.
+    fn state_with_transfer_callback() -> (DataControlState, TransferLog) {
+        let state = DataControlState {
+            current_source_mime_types: vec!["image/png".to_string()],
+            ..Default::default()
+        };
+        let requests: TransferLog = Arc::default();
+        let seen = Arc::clone(&requests);
+        state.shared_state.lock().unwrap().on_transfer = Some(Arc::new(move |serial, mime| {
+            seen.lock().unwrap().push((serial, mime));
+        }));
+        (state, requests)
+    }
+
+    #[test]
+    fn paste_without_data_is_held_until_the_transfer_completes() {
+        let (mut state, requests) = state_with_transfer_callback();
+        let (first_read, first_write) = nix::unistd::pipe().unwrap();
+        let (second_read, second_write) = nix::unistd::pipe().unwrap();
+
+        state.on_source_send("image/png", first_write);
+        state.on_source_send("image/png", second_write);
+        // Both pastes share one transfer.
+        let requested = requests.lock().unwrap().clone();
+        assert_eq!(requested, vec![(1, "image/png".to_string())]);
+
+        state.complete_transfer(1, Some(b"png bytes".to_vec()));
+        assert_eq!(read_all(first_read), b"png bytes");
+        assert_eq!(read_all(second_read), b"png bytes");
+
+        // A later paste is served from the cache without a new transfer.
+        let (third_read, third_write) = nix::unistd::pipe().unwrap();
+        state.on_source_send("image/png", third_write);
+        assert_eq!(read_all(third_read), b"png bytes");
+        assert_eq!(requests.lock().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn held_paste_gets_nothing_when_the_selection_is_lost() {
+        let (mut state, _requests) = state_with_transfer_callback();
+        let (read, write) = nix::unistd::pipe().unwrap();
+        state.on_source_send("image/png", write);
+
+        state.on_source_cancelled();
+        assert!(read_all(read).is_empty());
+        // An answer for the lost selection is ignored.
+        state.complete_transfer(1, Some(b"late".to_vec()));
+        assert!(state.source_data.is_empty());
+    }
+
+    #[test]
+    fn paste_of_an_unadvertised_type_raises_no_transfer() {
+        let (mut state, requests) = state_with_transfer_callback();
+        let (read, write) = nix::unistd::pipe().unwrap();
+        state.on_source_send("text/html", write);
+        assert!(read_all(read).is_empty());
+        assert!(requests.lock().unwrap().is_empty());
     }
 }

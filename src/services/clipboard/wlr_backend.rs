@@ -151,6 +151,30 @@ impl ClipboardBackend for WlrClipboardBackend {
         Ok(())
     }
 
+    fn on_transfer_requested(&mut self, callback: Box<dyn Fn(u32, String) + Send + Sync>) {
+        if let Ok(mut shared) = self.shared_clipboard.lock() {
+            shared.on_transfer = Some(Arc::from(callback));
+        }
+    }
+
+    fn complete_transfer(&mut self, serial: u32, data: Option<Vec<u8>>) -> Result<()> {
+        self.clipboard_tx
+            .send(ClipboardCommand::CompleteTransfer { serial, data })
+            .map_err(|e| {
+                PortalError::Wayland(format!("Failed to send CompleteTransfer command: {e}"))
+            })
+    }
+
+    fn clear_selection(&mut self) -> Result<()> {
+        self.local_data.clear();
+        self.local_mime_types.clear();
+        self.clipboard_tx
+            .send(ClipboardCommand::ClearSelection)
+            .map_err(|e| {
+                PortalError::Wayland(format!("Failed to send ClearSelection command: {e}"))
+            })
+    }
+
     fn set_health_sender(&mut self, tx: crate::health::HealthSender) {
         self.health_tx = Some(tx);
     }

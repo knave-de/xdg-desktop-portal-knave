@@ -1043,6 +1043,12 @@ impl WaylandConnection {
                 ClipboardCommand::ReceiveFromOffer { mime_type, fd } => {
                     self.state.data_control.receive_from_offer(&mime_type, fd);
                 }
+                ClipboardCommand::CompleteTransfer { serial, data } => {
+                    self.state.data_control.complete_transfer(serial, data);
+                }
+                ClipboardCommand::ClearSelection => {
+                    self.state.data_control.clear_selection();
+                }
             }
         }
     }
