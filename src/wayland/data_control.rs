@@ -364,8 +364,11 @@ impl DataControlState {
             shared.serial += 1;
             shared.mime_types.clone_from(&mime_types);
 
-            if !own && let Some(ref callback) = shared.on_change {
-                callback(mime_types);
+            // No let-chain: the MSRV (1.87) predates them.
+            if !own {
+                if let Some(ref callback) = shared.on_change {
+                    callback(mime_types);
+                }
             }
         }
     }

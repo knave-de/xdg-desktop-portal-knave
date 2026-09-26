@@ -613,11 +613,11 @@ impl Dispatch<ZxdgOutputV1, Arc<Mutex<OutputInfo>>> for WaylandState {
         _conn: &Connection,
         _qh: &QueueHandle<Self>,
     ) {
-        if let Ok(mut info) = data.lock()
-            && let zxdg_output_v1::Event::LogicalPosition { x, y } = event
-        {
-            info.x = x;
-            info.y = y;
+        if let zxdg_output_v1::Event::LogicalPosition { x, y } = event {
+            if let Ok(mut info) = data.lock() {
+                info.x = x;
+                info.y = y;
+            }
         }
     }
 }
