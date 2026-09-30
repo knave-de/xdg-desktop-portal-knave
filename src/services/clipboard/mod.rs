@@ -1,27 +1,16 @@
 //! Clipboard backend abstraction.
 //!
-//! Provides a [`ClipboardBackend`] trait with two implementations:
-//! - [`ExtClipboardBackend`]: Uses `ext-data-control-v1` (preferred, staging)
-//! - [`WlrClipboardBackend`]: Uses `zwlr-data-control-manager-v1` (fallback)
-//!
-//! Both backends communicate with the Wayland event loop thread via a
-//! command channel (`ClipboardCommand`) and shared state
-//! (`SharedClipboardState`). The backend is selected at startup based on
-//! available protocols detected from the Wayland compositor's global registry.
+//! Provides a [`ClipboardBackend`] trait and [`DataControlBackend`], its
+//! implementation on top of the `lamco-data-control` crate. That crate owns
+//! its own Wayland connection and speaks both `ext-data-control-v1`
+//! (preferred) and `wlr-data-control-unstable-v1`.
 
-mod ext_backend;
-mod wlr_backend;
+mod backend;
 
-use std::sync::{Arc, Mutex, mpsc};
+pub use backend::DataControlBackend;
+use lamco_data_control::{Options, Preference};
 
-pub use ext_backend::ExtClipboardBackend;
-pub use wlr_backend::WlrClipboardBackend;
-
-use crate::{
-    error::Result,
-    types::ClipboardData,
-    wayland::{AvailableProtocols, ClipboardCommand, SharedClipboardState},
-};
+use crate::{error::Result, types::ClipboardData, wayland::AvailableProtocols};
 
 /// Clipboard protocol in use.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -164,132 +153,42 @@ pub trait ClipboardBackend: Send + Sync {
     fn write_done(&mut self, serial: u32, success: bool) -> Result<()>;
 }
 
-/// Find a MIME type match from the available set, tolerating charset differences.
-///
-/// Wayland apps may offer `text/plain` while RDP asks for `text/plain;charset=utf-8`
-/// (or vice versa). This function tries an exact match first, then strips or adds
-/// the charset parameter for text types.
-///
-/// Returns the actual MIME type string from `available` that should be used for
-/// the Wayland `receive` request.
-pub(crate) fn find_mime_match<'a>(requested: &str, available: &'a [String]) -> Option<&'a str> {
-    // Exact match
-    if let Some(found) = available.iter().find(|m| m.as_str() == requested) {
-        return Some(found.as_str());
-    }
-
-    // For text types, try stripping or adding charset parameter
-    if requested.starts_with("text/") {
-        if let Some(base) = requested.split(';').next() {
-            // Requested has charset — try base without it
-            if requested.contains(';') {
-                if let Some(found) = available.iter().find(|m| m.as_str() == base) {
-                    return Some(found.as_str());
-                }
-            }
-
-            // Requested has no charset — try common charset variants
-            if !requested.contains(';') {
-                for suffix in [";charset=utf-8", ";charset=UTF-8"] {
-                    let with_charset = format!("{requested}{suffix}");
-                    if let Some(found) = available.iter().find(|m| m.as_str() == with_charset) {
-                        return Some(found.as_str());
-                    }
-                }
-            }
-
-            // Try any available type that shares the same base
-            if let Some(found) = available.iter().find(|m| m.split(';').next() == Some(base)) {
-                return Some(found.as_str());
-            }
-        }
-    }
-
-    None
+/// Map the portal's clipboard preferences onto the crate's connection options.
+fn options_for(prefs: &ClipboardPreference) -> (Preference, bool) {
+    let preference = match prefs.preferred {
+        None => Preference::Auto,
+        Some(ClipboardProtocol::ExtDataControl) => Preference::Ext,
+        Some(ClipboardProtocol::WlrDataControl) => Preference::Wlr,
+    };
+    (preference, prefs.allow_fallback)
 }
 
 /// Create a clipboard backend based on preferences and available protocols.
 ///
-/// Selection algorithm:
-/// 1. If a preferred protocol is specified, try it first
-/// 2. If preferred is unavailable and fallback is allowed, try the alternative
-/// 3. If no preference, auto-detect (ext preferred over wlr)
-/// 4. Returns None if no clipboard protocol is available or usable
-///
-/// The `clipboard_tx` is the command sender to the Wayland event loop, and
-/// `shared_clipboard` provides cross-thread access to the current selection.
+/// Returns `None` if the compositor offers no data-control protocol, or the
+/// preferred one is missing and fallback is disabled. Connection failures are
+/// logged and also give `None`, so the portal runs without a clipboard.
 pub fn create_clipboard_backend(
     protocols: &AvailableProtocols,
     prefs: &ClipboardPreference,
-    clipboard_tx: mpsc::Sender<ClipboardCommand>,
-    shared_clipboard: Arc<Mutex<SharedClipboardState>>,
 ) -> Option<Box<dyn ClipboardBackend>> {
-    let ext_available = protocols.ext_data_control;
-    let wlr_available = protocols.wlr_data_control;
+    if !protocols.has_clipboard() {
+        tracing::warn!("No clipboard protocols available");
+        return None;
+    }
 
-    let selected = if let Some(preferred) = prefs.preferred {
-        let preferred_available = match preferred {
-            ClipboardProtocol::ExtDataControl => ext_available,
-            ClipboardProtocol::WlrDataControl => wlr_available,
-        };
-
-        if preferred_available {
-            Some(preferred)
-        } else if prefs.allow_fallback {
-            let fallback = match preferred {
-                ClipboardProtocol::ExtDataControl => ClipboardProtocol::WlrDataControl,
-                ClipboardProtocol::WlrDataControl => ClipboardProtocol::ExtDataControl,
-            };
-            let fallback_available = match fallback {
-                ClipboardProtocol::ExtDataControl => ext_available,
-                ClipboardProtocol::WlrDataControl => wlr_available,
-            };
-
-            if fallback_available {
-                tracing::info!(
-                    "Preferred clipboard protocol {} unavailable, using {}",
-                    preferred,
-                    fallback
-                );
-                Some(fallback)
-            } else {
-                None
-            }
-        } else {
-            tracing::warn!(
-                "Preferred clipboard protocol {} unavailable and fallback disabled",
-                preferred
-            );
-            None
+    match DataControlBackend::connect(&{
+        let (preference, allow_fallback) = options_for(prefs);
+        Options::new()
+            .preference(preference)
+            .allow_fallback(allow_fallback)
+    }) {
+        Ok(backend) => {
+            tracing::info!(protocol = %backend.protocol_type(), "Clipboard backend ready");
+            Some(Box::new(backend))
         }
-    } else {
-        // Auto-detect: ext preferred over wlr
-        if ext_available {
-            Some(ClipboardProtocol::ExtDataControl)
-        } else if wlr_available {
-            Some(ClipboardProtocol::WlrDataControl)
-        } else {
-            None
-        }
-    };
-
-    match selected {
-        Some(ClipboardProtocol::ExtDataControl) => {
-            tracing::info!("Using ext-data-control-v1 for clipboard");
-            Some(Box::new(ExtClipboardBackend::new(
-                clipboard_tx,
-                shared_clipboard,
-            )))
-        }
-        Some(ClipboardProtocol::WlrDataControl) => {
-            tracing::info!("Using wlr-data-control-v1 for clipboard");
-            Some(Box::new(WlrClipboardBackend::new(
-                clipboard_tx,
-                shared_clipboard,
-            )))
-        }
-        None => {
-            tracing::warn!("No clipboard protocols available");
+        Err(error) => {
+            tracing::warn!(%error, "Clipboard backend unavailable");
             None
         }
     }
@@ -312,140 +211,34 @@ mod tests {
     }
 
     #[test]
-    fn test_create_clipboard_backend_ext() {
-        let (tx, _rx) = mpsc::channel();
-        let shared = Arc::new(Mutex::new(SharedClipboardState::default()));
+    fn test_no_protocols_gives_no_backend() {
         let prefs = ClipboardPreference::default();
-        let protocols = AvailableProtocols {
-            ext_data_control: true,
-            wlr_data_control: true,
-            ..Default::default()
-        };
-        let backend = create_clipboard_backend(&protocols, &prefs, tx, shared).unwrap();
-        assert_eq!(backend.protocol_type(), ClipboardProtocol::ExtDataControl);
+        assert!(create_clipboard_backend(&AvailableProtocols::default(), &prefs).is_none());
     }
 
     #[test]
-    fn test_create_clipboard_backend_wlr_fallback() {
-        let (tx, _rx) = mpsc::channel();
-        let shared = Arc::new(Mutex::new(SharedClipboardState::default()));
-        let prefs = ClipboardPreference::default();
-        let protocols = AvailableProtocols {
-            ext_data_control: false,
-            wlr_data_control: true,
-            ..Default::default()
-        };
-        let backend = create_clipboard_backend(&protocols, &prefs, tx, shared).unwrap();
-        assert_eq!(backend.protocol_type(), ClipboardProtocol::WlrDataControl);
-    }
-
-    #[test]
-    fn test_create_clipboard_backend_none() {
-        let (tx, _rx) = mpsc::channel();
-        let shared = Arc::new(Mutex::new(SharedClipboardState::default()));
-        let prefs = ClipboardPreference::default();
-        let protocols = AvailableProtocols::default();
-        assert!(create_clipboard_backend(&protocols, &prefs, tx, shared).is_none());
+    fn test_default_preferences_map_to_auto_with_fallback() {
+        assert_eq!(
+            options_for(&ClipboardPreference::default()),
+            (Preference::Auto, true)
+        );
     }
 
     #[test]
     fn test_explicit_wlr_preference() {
-        let (tx, _rx) = mpsc::channel();
-        let shared = Arc::new(Mutex::new(SharedClipboardState::default()));
         let prefs = ClipboardPreference {
             preferred: Some(ClipboardProtocol::WlrDataControl),
             allow_fallback: true,
         };
-        let protocols = AvailableProtocols {
-            ext_data_control: true,
-            wlr_data_control: true,
-            ..Default::default()
-        };
-        let backend = create_clipboard_backend(&protocols, &prefs, tx, shared).unwrap();
-        assert_eq!(backend.protocol_type(), ClipboardProtocol::WlrDataControl);
+        assert_eq!(options_for(&prefs), (Preference::Wlr, true));
     }
 
     #[test]
-    fn test_preferred_unavailable_with_fallback() {
-        let (tx, _rx) = mpsc::channel();
-        let shared = Arc::new(Mutex::new(SharedClipboardState::default()));
-        let prefs = ClipboardPreference {
-            preferred: Some(ClipboardProtocol::ExtDataControl),
-            allow_fallback: true,
-        };
-        let protocols = AvailableProtocols {
-            ext_data_control: false,
-            wlr_data_control: true,
-            ..Default::default()
-        };
-        let backend = create_clipboard_backend(&protocols, &prefs, tx, shared).unwrap();
-        assert_eq!(backend.protocol_type(), ClipboardProtocol::WlrDataControl);
-    }
-
-    #[test]
-    fn test_preferred_unavailable_no_fallback() {
-        let (tx, _rx) = mpsc::channel();
-        let shared = Arc::new(Mutex::new(SharedClipboardState::default()));
+    fn test_preferred_without_fallback_is_passed_through() {
         let prefs = ClipboardPreference {
             preferred: Some(ClipboardProtocol::ExtDataControl),
             allow_fallback: false,
         };
-        let protocols = AvailableProtocols {
-            ext_data_control: false,
-            wlr_data_control: true,
-            ..Default::default()
-        };
-        assert!(create_clipboard_backend(&protocols, &prefs, tx, shared).is_none());
-    }
-
-    #[test]
-    fn test_find_mime_match_exact() {
-        let available = vec!["text/plain".to_string(), "image/png".to_string()];
-        assert_eq!(
-            find_mime_match("text/plain", &available),
-            Some("text/plain")
-        );
-        assert_eq!(find_mime_match("image/png", &available), Some("image/png"));
-        assert_eq!(find_mime_match("text/html", &available), None);
-    }
-
-    #[test]
-    fn test_find_mime_match_strip_charset() {
-        // Server asks for charset variant, compositor offers bare type
-        let available = vec!["text/plain".to_string()];
-        assert_eq!(
-            find_mime_match("text/plain;charset=utf-8", &available),
-            Some("text/plain")
-        );
-    }
-
-    #[test]
-    fn test_find_mime_match_add_charset() {
-        // Server asks for bare type, compositor offers charset variant
-        let available = vec!["text/plain;charset=utf-8".to_string()];
-        assert_eq!(
-            find_mime_match("text/plain", &available),
-            Some("text/plain;charset=utf-8")
-        );
-    }
-
-    #[test]
-    fn test_find_mime_match_non_text_no_fallback() {
-        // Non-text types should not do charset fallback
-        let available = vec!["image/png".to_string()];
-        assert_eq!(find_mime_match("image/png;charset=utf-8", &available), None);
-    }
-
-    #[test]
-    fn test_find_mime_match_prefers_exact() {
-        // When both exact and fuzzy matches exist, prefer exact
-        let available = vec![
-            "text/plain".to_string(),
-            "text/plain;charset=utf-8".to_string(),
-        ];
-        assert_eq!(
-            find_mime_match("text/plain;charset=utf-8", &available),
-            Some("text/plain;charset=utf-8")
-        );
+        assert_eq!(options_for(&prefs), (Preference::Ext, false));
     }
 }

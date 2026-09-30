@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Breaking
+
+- **Clipboard now runs on the new `lamco-data-control` crate.** The
+  data-control client moved out of this crate into a standalone workspace
+  member, and the portal talks to it over its own Wayland connection.
+  `WaylandConnection::spawn_event_loop` and
+  `spawn_event_loop_with_frame_channel` no longer return the clipboard command
+  sender and shared clipboard state, so their return tuple is now
+  `(stop, shared_state, capture_tx, thread)`. `create_clipboard_backend` no
+  longer takes those two values. `ClipboardCommand`, `SharedClipboardState`,
+  `ExtClipboardBackend` and `WlrClipboardBackend` are removed, replaced by
+  `DataControlBackend`. The `ClipboardBackend` trait is unchanged.
+
+### Changed
+
+- A selection that another client has since replaced is no longer served from
+  a local cache on read-back; reads always go to the compositor.
+- A read whose source stalls for five seconds now fails with an error
+  instead of returning the bytes received so far.
+- Both data-control protocols are now reported as available when the
+  compositor offers both, where before only the one that was bound was.
+
 ## [0.10.0] - 2026-09-30
 
 ### Breaking

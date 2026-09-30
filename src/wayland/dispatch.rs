@@ -17,12 +17,6 @@ use wayland_client::{
 };
 use wayland_protocols::{
     ext::{
-        data_control::v1::client::{
-            ext_data_control_device_v1::{self, ExtDataControlDeviceV1},
-            ext_data_control_manager_v1::ExtDataControlManagerV1,
-            ext_data_control_offer_v1::{self, ExtDataControlOfferV1},
-            ext_data_control_source_v1::{self, ExtDataControlSourceV1},
-        },
         image_capture_source::v1::client::{
             ext_image_capture_source_v1::ExtImageCaptureSourceV1,
             ext_output_image_capture_source_manager_v1::ExtOutputImageCaptureSourceManagerV1,
@@ -57,12 +51,6 @@ use wayland_protocols_misc::zwp_virtual_keyboard_v1::client::{
     zwp_virtual_keyboard_v1::ZwpVirtualKeyboardV1,
 };
 use wayland_protocols_wlr::{
-    data_control::v1::client::{
-        zwlr_data_control_device_v1::{self, ZwlrDataControlDeviceV1},
-        zwlr_data_control_manager_v1::ZwlrDataControlManagerV1,
-        zwlr_data_control_offer_v1::{self, ZwlrDataControlOfferV1},
-        zwlr_data_control_source_v1::{self, ZwlrDataControlSourceV1},
-    },
     layer_shell::v1::client::{
         zwlr_layer_shell_v1::ZwlrLayerShellV1,
         zwlr_layer_surface_v1::{self, ZwlrLayerSurfaceV1},
@@ -78,7 +66,6 @@ use wayland_protocols_wlr::{
 };
 
 use super::{
-    data_control::DataControlState,
     ext_capture::ExtCaptureState,
     input_capture::{CachedKeymap, InputCaptureBarrierState},
     screencopy::ScreencopyState,
@@ -199,10 +186,6 @@ pub struct WaylandState {
     pub screencopy: ScreencopyState,
     /// ext-image-copy-capture state (preferred protocol).
     pub ext_capture: ExtCaptureState,
-
-    // === Clipboard ===
-    /// Data control clipboard state (ext or wlr protocol).
-    pub data_control: DataControlState,
 
     // === InputCapture ===
     /// wl_compositor, used to create barrier surfaces.
@@ -823,95 +806,6 @@ impl Dispatch<ZwlrScreencopyFrameV1, u32> for WaylandState {
     }
 }
 
-// === wlr-data-control Dispatch impls ===
-
-impl Dispatch<ZwlrDataControlManagerV1, ()> for WaylandState {
-    fn event(
-        _state: &mut Self,
-        _proxy: &ZwlrDataControlManagerV1,
-        _event: <ZwlrDataControlManagerV1 as wayland_client::Proxy>::Event,
-        _data: &(),
-        _conn: &Connection,
-        _qh: &QueueHandle<Self>,
-    ) {
-        // Manager has no events
-    }
-}
-
-impl Dispatch<ZwlrDataControlDeviceV1, ()> for WaylandState {
-    fn event(
-        state: &mut Self,
-        _proxy: &ZwlrDataControlDeviceV1,
-        event: <ZwlrDataControlDeviceV1 as wayland_client::Proxy>::Event,
-        _data: &(),
-        _conn: &Connection,
-        _qh: &QueueHandle<Self>,
-    ) {
-        match event {
-            zwlr_data_control_device_v1::Event::DataOffer { id } => {
-                state.data_control.on_data_offer_wlr(id);
-            }
-            zwlr_data_control_device_v1::Event::Selection { id } => {
-                if id.is_some() {
-                    state.data_control.on_selection();
-                } else {
-                    state.data_control.on_selection_cleared();
-                }
-            }
-            zwlr_data_control_device_v1::Event::Finished => {
-                state.data_control.on_device_finished();
-            }
-            zwlr_data_control_device_v1::Event::PrimarySelection { .. } => {
-                // We only handle the regular clipboard, not primary selection
-                tracing::trace!("wlr data control primary selection event (ignored)");
-            }
-            _ => {}
-        }
-    }
-
-    // DataOffer event creates a child ZwlrDataControlOfferV1 object;
-    // without this the default panics in wayland-client's event_queue.rs
-    wayland_client::event_created_child!(WaylandState, ZwlrDataControlDeviceV1, [
-        zwlr_data_control_device_v1::EVT_DATA_OFFER_OPCODE => (ZwlrDataControlOfferV1, ()),
-    ]);
-}
-
-impl Dispatch<ZwlrDataControlSourceV1, ()> for WaylandState {
-    fn event(
-        state: &mut Self,
-        _proxy: &ZwlrDataControlSourceV1,
-        event: <ZwlrDataControlSourceV1 as wayland_client::Proxy>::Event,
-        _data: &(),
-        _conn: &Connection,
-        _qh: &QueueHandle<Self>,
-    ) {
-        match event {
-            zwlr_data_control_source_v1::Event::Send { mime_type, fd } => {
-                state.data_control.on_source_send(&mime_type, fd);
-            }
-            zwlr_data_control_source_v1::Event::Cancelled => {
-                state.data_control.on_source_cancelled();
-            }
-            _ => {}
-        }
-    }
-}
-
-impl Dispatch<ZwlrDataControlOfferV1, ()> for WaylandState {
-    fn event(
-        state: &mut Self,
-        _proxy: &ZwlrDataControlOfferV1,
-        event: <ZwlrDataControlOfferV1 as wayland_client::Proxy>::Event,
-        _data: &(),
-        _conn: &Connection,
-        _qh: &QueueHandle<Self>,
-    ) {
-        if let zwlr_data_control_offer_v1::Event::Offer { mime_type } = event {
-            state.data_control.on_offer_mime_type(mime_type);
-        }
-    }
-}
-
 // === ext-image-copy-capture Dispatch impls ===
 
 impl Dispatch<ExtOutputImageCaptureSourceManagerV1, ()> for WaylandState {
@@ -1057,94 +951,6 @@ impl Dispatch<ExtImageCopyCaptureFrameV1, u32> for WaylandState {
                     "ext capture frame: unhandled event variant — possibly a newer protocol revision"
                 );
             }
-        }
-    }
-}
-
-// === ext-data-control Dispatch impls ===
-
-impl Dispatch<ExtDataControlManagerV1, ()> for WaylandState {
-    fn event(
-        _state: &mut Self,
-        _proxy: &ExtDataControlManagerV1,
-        _event: <ExtDataControlManagerV1 as wayland_client::Proxy>::Event,
-        _data: &(),
-        _conn: &Connection,
-        _qh: &QueueHandle<Self>,
-    ) {
-        // Manager has no events
-    }
-}
-
-impl Dispatch<ExtDataControlDeviceV1, ()> for WaylandState {
-    fn event(
-        state: &mut Self,
-        _proxy: &ExtDataControlDeviceV1,
-        event: <ExtDataControlDeviceV1 as wayland_client::Proxy>::Event,
-        _data: &(),
-        _conn: &Connection,
-        _qh: &QueueHandle<Self>,
-    ) {
-        match event {
-            ext_data_control_device_v1::Event::DataOffer { id } => {
-                state.data_control.on_data_offer_ext(id);
-            }
-            ext_data_control_device_v1::Event::Selection { id } => {
-                if id.is_some() {
-                    state.data_control.on_selection();
-                } else {
-                    state.data_control.on_selection_cleared();
-                }
-            }
-            ext_data_control_device_v1::Event::Finished => {
-                state.data_control.on_device_finished();
-            }
-            ext_data_control_device_v1::Event::PrimarySelection { .. } => {
-                tracing::trace!("ext data control primary selection event (ignored)");
-            }
-            _ => {}
-        }
-    }
-
-    // DataOffer event creates a child ExtDataControlOfferV1 object;
-    // without this the default panics in wayland-client's event_queue.rs
-    wayland_client::event_created_child!(WaylandState, ExtDataControlDeviceV1, [
-        ext_data_control_device_v1::EVT_DATA_OFFER_OPCODE => (ExtDataControlOfferV1, ()),
-    ]);
-}
-
-impl Dispatch<ExtDataControlSourceV1, ()> for WaylandState {
-    fn event(
-        state: &mut Self,
-        _proxy: &ExtDataControlSourceV1,
-        event: <ExtDataControlSourceV1 as wayland_client::Proxy>::Event,
-        _data: &(),
-        _conn: &Connection,
-        _qh: &QueueHandle<Self>,
-    ) {
-        match event {
-            ext_data_control_source_v1::Event::Send { mime_type, fd } => {
-                state.data_control.on_source_send(&mime_type, fd);
-            }
-            ext_data_control_source_v1::Event::Cancelled => {
-                state.data_control.on_source_cancelled();
-            }
-            _ => {}
-        }
-    }
-}
-
-impl Dispatch<ExtDataControlOfferV1, ()> for WaylandState {
-    fn event(
-        state: &mut Self,
-        _proxy: &ExtDataControlOfferV1,
-        event: <ExtDataControlOfferV1 as wayland_client::Proxy>::Event,
-        _data: &(),
-        _conn: &Connection,
-        _qh: &QueueHandle<Self>,
-    ) {
-        if let ext_data_control_offer_v1::Event::Offer { mime_type } = event {
-            state.data_control.on_offer_mime_type(mime_type);
         }
     }
 }

@@ -13,7 +13,6 @@
 //! - Provides access to bound protocol objects
 //! - Integrates with tokio via `AsyncFd` for event dispatch
 
-pub mod data_control;
 pub mod dispatch;
 pub mod ext_capture;
 pub mod globals;
@@ -30,8 +29,6 @@ use std::{
     thread,
 };
 
-use data_control::DataControlManager;
-pub use data_control::{ClipboardCommand, SharedClipboardState};
 pub use dispatch::{OutputInfo, WaylandState};
 pub use globals::AvailableProtocols;
 pub use input_capture::{CachedKeymap, InputCaptureActivationEvent, InputCaptureBarrierState};
@@ -42,7 +39,6 @@ use wayland_client::{
 };
 use wayland_protocols::{
     ext::{
-        data_control::v1::client::ext_data_control_manager_v1::ExtDataControlManagerV1,
         image_capture_source::v1::client::ext_output_image_capture_source_manager_v1::ExtOutputImageCaptureSourceManagerV1,
         image_copy_capture::v1::client::ext_image_copy_capture_manager_v1::ExtImageCopyCaptureManagerV1,
     },
@@ -55,7 +51,6 @@ use wayland_protocols::{
 };
 use wayland_protocols_misc::zwp_virtual_keyboard_v1::client::zwp_virtual_keyboard_manager_v1::ZwpVirtualKeyboardManagerV1;
 use wayland_protocols_wlr::{
-    data_control::v1::client::zwlr_data_control_manager_v1::ZwlrDataControlManagerV1,
     layer_shell::v1::client::zwlr_layer_shell_v1::ZwlrLayerShellV1,
     screencopy::v1::client::zwlr_screencopy_manager_v1::ZwlrScreencopyManagerV1,
     virtual_pointer::v1::client::zwlr_virtual_pointer_manager_v1::ZwlrVirtualPointerManagerV1,
@@ -512,48 +507,6 @@ impl WaylandConnection {
             }
         }
 
-        // === Data control (clipboard) ===
-        // Prefer ext-data-control-v1, fall back to wlr-data-control-v1.
-        // Only bind one; they have identical semantics.
-        let mut data_control_bound = false;
-
-        match globals.bind::<ExtDataControlManagerV1, _, _>(qh, 1..=1, ()) {
-            Ok(manager) => {
-                tracing::debug!("Bound ext_data_control_manager_v1");
-                state.data_control.manager = Some(DataControlManager::Ext(manager));
-                protocols.ext_data_control = true;
-                data_control_bound = true;
-            }
-            Err(e) => {
-                tracing::debug!("ext_data_control_manager_v1 not available: {}", e);
-            }
-        }
-
-        if !data_control_bound {
-            match globals.bind::<ZwlrDataControlManagerV1, _, _>(qh, 1..=2, ()) {
-                Ok(manager) => {
-                    tracing::debug!("Bound zwlr_data_control_manager_v1");
-                    state.data_control.manager = Some(DataControlManager::Wlr(manager));
-                    protocols.wlr_data_control = true;
-                    data_control_bound = true;
-                }
-                Err(e) => {
-                    tracing::debug!("zwlr_data_control_manager_v1 not available: {}", e);
-                }
-            }
-        }
-
-        // Create data control device from seat (after seat is bound above)
-        if data_control_bound {
-            if let Some(ref seat) = state.seat {
-                state.data_control.create_device(seat, qh);
-            } else {
-                tracing::warn!(
-                    "Data control manager bound but no seat available for device creation"
-                );
-            }
-        }
-
         // === xdg_output (real multi-monitor logical position) ===
         match globals.bind::<ZxdgOutputManagerV1, _, _>(qh, 1..=3, ()) {
             Ok(manager) => {
@@ -582,17 +535,20 @@ impl WaylandConnection {
                         protocols.ext_image_copy_capture = true;
                         tracing::debug!("Found ext_image_copy_capture_manager_v1");
                     }
-                    // For data-control + screencopy detections below: the global
-                    // is bound above via globals.bind() and the flag set there.
-                    // These arms only fire when binding failed (detection only).
+                    // Screencopy is bound above and its flag set there; this arm
+                    // only fires when binding failed (detection only).
                     "zwlr_screencopy_manager_v1" if !protocols.wlr_screencopy => {
                         tracing::debug!("Found zwlr_screencopy_manager_v1 (not bound)");
                     }
-                    "ext_data_control_manager_v1" if !protocols.ext_data_control => {
-                        tracing::debug!("Found ext_data_control_manager_v1 (not bound)");
+                    // Clipboard is handled by `lamco-data-control` on its own
+                    // connection, so the globals are detected here but not bound.
+                    "ext_data_control_manager_v1" => {
+                        protocols.ext_data_control = true;
+                        tracing::debug!("Found ext_data_control_manager_v1");
                     }
-                    "zwlr_data_control_manager_v1" if !protocols.wlr_data_control => {
-                        tracing::debug!("Found zwlr_data_control_manager_v1 (not bound)");
+                    "zwlr_data_control_manager_v1" => {
+                        protocols.wlr_data_control = true;
+                        tracing::debug!("Found zwlr_data_control_manager_v1");
                     }
                     _ => {}
                 }
@@ -811,7 +767,6 @@ impl WaylandConnection {
         mut self,
         stop: Arc<AtomicBool>,
         capture_rx: mpsc::Receiver<CaptureCommand>,
-        clipboard_rx: mpsc::Receiver<ClipboardCommand>,
     ) {
         tracing::info!("Starting Wayland event loop");
 
@@ -849,9 +804,6 @@ impl WaylandConnection {
 
             // Process capture commands from backends
             self.process_capture_commands(&capture_rx);
-
-            // Process clipboard commands from backends
-            self.process_clipboard_commands(&clipboard_rx);
 
             // Process InputCapture barrier-surface commands, if configured
             self.process_input_capture_commands();
@@ -1028,31 +980,6 @@ impl WaylandConnection {
         }
     }
 
-    /// Process pending clipboard commands from backends.
-    fn process_clipboard_commands(&mut self, clipboard_rx: &mpsc::Receiver<ClipboardCommand>) {
-        while let Ok(cmd) = clipboard_rx.try_recv() {
-            match cmd {
-                ClipboardCommand::SetSelection { mime_types, data } => {
-                    self.state
-                        .data_control
-                        .set_selection(&mime_types, data, &self.queue_handle);
-                }
-                ClipboardCommand::UpdateSourceData { mime_type, data } => {
-                    self.state.data_control.update_source_data(mime_type, data);
-                }
-                ClipboardCommand::ReceiveFromOffer { mime_type, fd } => {
-                    self.state.data_control.receive_from_offer(&mime_type, fd);
-                }
-                ClipboardCommand::CompleteTransfer { serial, data } => {
-                    self.state.data_control.complete_transfer(serial, data);
-                }
-                ClipboardCommand::ClearSelection => {
-                    self.state.data_control.clear_selection();
-                }
-            }
-        }
-    }
-
     /// Process pending InputCapture barrier-surface commands.
     ///
     /// No-op if [`Self::create_input_capture_channel`] was never called
@@ -1104,15 +1031,10 @@ impl WaylandConnection {
     /// Spawn the Wayland event loop on a dedicated OS thread.
     ///
     /// Returns a stop flag, the shared Wayland state, a capture command sender,
-    /// a clipboard command sender, the shared clipboard state, and the thread
-    /// join handle. The connection is consumed and moved to the new thread.
+    /// and the thread join handle. The connection is consumed and moved to the new thread.
     ///
     /// The `pipewire` manager is given to the event loop so it can send
     /// captured frames directly to PipeWire streams without an extra hop.
-    #[expect(
-        clippy::type_complexity,
-        reason = "6-tuple return is the minimum needed to expose all event loop handles"
-    )]
     pub fn spawn_event_loop(
         self,
         pipewire: Arc<PipeWireManager>,
@@ -1120,8 +1042,6 @@ impl WaylandConnection {
         Arc<AtomicBool>,
         Arc<Mutex<SharedWaylandState>>,
         mpsc::Sender<CaptureCommand>,
-        mpsc::Sender<ClipboardCommand>,
-        Arc<Mutex<SharedClipboardState>>,
         thread::JoinHandle<()>,
     ) {
         self.spawn_event_loop_with_frame_channel(pipewire, None)
@@ -1133,10 +1053,6 @@ impl WaylandConnection {
     /// channel instead of PipeWire. This bypasses PipeWire buffer sharing
     /// which doesn't work across separate PipeWire connections.
     /// Return type for `spawn_event_loop_with_frame_channel`.
-    #[expect(
-        clippy::type_complexity,
-        reason = "multi-value return from event loop spawn"
-    )]
     pub fn spawn_event_loop_with_frame_channel(
         mut self,
         pipewire: Arc<PipeWireManager>,
@@ -1145,18 +1061,12 @@ impl WaylandConnection {
         Arc<AtomicBool>,
         Arc<Mutex<SharedWaylandState>>,
         mpsc::Sender<CaptureCommand>,
-        mpsc::Sender<ClipboardCommand>,
-        Arc<Mutex<SharedClipboardState>>,
         thread::JoinHandle<()>,
     ) {
         let stop = Arc::new(AtomicBool::new(false));
         let stop_clone = Arc::clone(&stop);
         let shared = self.shared_state();
         let (capture_tx, capture_rx) = mpsc::channel();
-        let (clipboard_tx, clipboard_rx) = mpsc::channel();
-
-        // Get a handle to the shared clipboard state before moving self
-        let shared_clipboard = Arc::clone(&self.state.data_control.shared_state);
 
         // Give the PipeWire manager to the capture states so the event loop
         // can send frame data directly to PipeWire.
@@ -1184,17 +1094,10 @@ impl WaylandConnection {
         let handle = thread::Builder::new()
             .name("wayland-event-loop".to_string())
             .spawn(move || {
-                self.run_event_loop(stop_clone, capture_rx, clipboard_rx);
+                self.run_event_loop(stop_clone, capture_rx);
             })
             .expect("Failed to spawn Wayland event loop thread");
 
-        (
-            stop,
-            shared,
-            capture_tx,
-            clipboard_tx,
-            shared_clipboard,
-            handle,
-        )
+        (stop, shared, capture_tx, handle)
     }
 }

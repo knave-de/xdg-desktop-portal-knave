@@ -1637,6 +1637,7 @@ dependencies = [
  "enumflags2",
  "evdev",
  "futures",
+ "lamco-data-control",
  "libc",
  "libspa",
  "nix 0.31.3",

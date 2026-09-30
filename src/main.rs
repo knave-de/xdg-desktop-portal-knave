@@ -68,14 +68,8 @@ async fn main() -> Result<()> {
     // This continuously dispatches Wayland events (screencopy frames,
     // output hotplug, data control) and updates the shared state.
     // The PipeWire manager is given to the event loop for frame delivery.
-    let (
-        wayland_stop,
-        shared_wayland_state,
-        capture_tx,
-        clipboard_tx,
-        shared_clipboard,
-        _wayland_thread,
-    ) = wayland.spawn_event_loop(Arc::clone(&pipewire_manager));
+    let (wayland_stop, shared_wayland_state, capture_tx, _wayland_thread) =
+        wayland.spawn_event_loop(Arc::clone(&pipewire_manager));
 
     // Create backends based on detected protocols
     let input_config = InputBackendConfig::from_env();
@@ -94,8 +88,7 @@ async fn main() -> Result<()> {
     )?;
 
     let clipboard_prefs = ClipboardPreference::from_env();
-    let clipboard_backend =
-        create_clipboard_backend(&protocols, &clipboard_prefs, clipboard_tx, shared_clipboard);
+    let clipboard_backend = create_clipboard_backend(&protocols, &clipboard_prefs);
 
     // Create and run the portal backend
     let mut backend = PortalBackend::new(
