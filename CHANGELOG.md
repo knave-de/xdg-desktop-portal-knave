@@ -7,7 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [1.0.0] - Unreleased
+## [1.0.0] - 2026-09-30
 
 ### Breaking
 
@@ -21,6 +21,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   longer takes those two values. `ClipboardCommand`, `SharedClipboardState`,
   `ExtClipboardBackend` and `WlrClipboardBackend` are removed, replaced by
   `DataControlBackend`. The `ClipboardBackend` trait is unchanged.
+
+### Added
+
+- **`lamco-data-control` 1.0.0**, the standalone data-control clipboard client
+  this crate now uses, is published from this repository as a workspace member.
+  It has no dependency on D-Bus, PipeWire or an RDP stack and can be used on
+  its own.
 
 ### Changed
 
