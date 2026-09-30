@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-09-30
+
+### Breaking
+
+- **`RawFrame` gained a public `node_id: u32` field.** It is the per-output
+  identifier (the PipeWire node ID convention `StreamInfo::node_id` uses) of
+  the output a frame was captured from. The direct-frame channel multiplexes
+  every monitor's captures, so a consumer had nothing to route or composite
+  frames by. `RawFrame` is public and re-exported from the crate root, so any
+  caller that constructs or exhaustively destructures it must add the field;
+  callers that only read fields are unaffected.
+
 ### Added
 
 - **Delayed rendering for data-control clipboard sources.** A paste of an
@@ -28,6 +40,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   item. The new source now replaces the old one first.
 - **A large paste no longer blocks the Wayland event loop.** Source data is
   written to the requesting fd on a worker thread.
+- **A data-control client no longer sees its own selection reported back as
+  another client's change.** The compositor sends a selection event for every
+  selection, including the one this client just set, so consumers saw their
+  own copy come back and had to guess echoes by timing; a real copy made
+  shortly after one of ours could be lost that way. While our source is live
+  and the offer matches the MIME types we advertised, the selection is ours:
+  the shared state stays current but the change callback is not called. Another
+  client taking the selection cancels our source, so its copy is still
+  reported.
+- **`OutputInfo::x`/`y` now carry the real compositor-space position.** They
+  were filled only from the legacy `wl_output.geometry` event, which wlroots
+  and other modern compositors report as `(0, 0)` regardless of the real
+  multi-monitor layout. The crate now binds `zxdg_output_v1` for every
+  `wl_output` (at startup and on hotplug) and reads its logical position,
+  which also corrects `get_input_capture_zones` and
+  `get_input_capture_zones_with_output`, since both read the same fields.
+- **The crate builds on its declared MSRV (1.87) again.** The own-selection
+  filter and the xdg-output position handler used let-chains, which are stable
+  only from Rust 1.88, so the MSRV job failed on both.
 
 ## [0.9.0] - 2026-09-10
 
