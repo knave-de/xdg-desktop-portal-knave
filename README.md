@@ -1,24 +1,29 @@
-# xdg-desktop-portal-generic
+# xdg-desktop-portal-knave
 
-[![Crates.io](https://img.shields.io/crates/v/xdg-desktop-portal-generic.svg)](https://crates.io/crates/xdg-desktop-portal-generic)
-[![Documentation](https://docs.rs/xdg-desktop-portal-generic/badge.svg)](https://docs.rs/xdg-desktop-portal-generic)
-[![License](https://img.shields.io/crates/l/xdg-desktop-portal-generic.svg)](https://github.com/lamco-admin/xdg-desktop-portal-generic)
+[![License](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](LICENSE-MIT)
 
-**[Website](https://lamco.ai/open-source/xdg-desktop-portal-generic/)** · **[Documentation](https://docs.rs/xdg-desktop-portal-generic)** · **[Source](https://github.com/lamco-admin/xdg-desktop-portal-generic)**
+**Source:** [knave-de/xdg-desktop-portal-knave](https://github.com/knave-de/xdg-desktop-portal-knave)
 
-A generic [XDG Desktop Portal](https://github.com/flatpak/xdg-desktop-portal)
-backend for Wayland compositors.
+`xdg-desktop-portal-knave` is Knave Desktop's portal backend, based on
+[xdg-desktop-portal-generic](https://github.com/lamco-admin/xdg-desktop-portal-generic).
+It provides the XDG Desktop Portal backend services needed by sandboxed and
+other desktop applications in a Wayland session.
 
-Enables sandboxed applications (Flatpak, Snap) to access screen capture, input
-injection, clipboard, screenshots, and desktop settings on any Wayland
-compositor that implements standard ext- or wlr- protocols.
+The fork currently retains the generic backend's compositor-independent
+implementation. Knave-specific integration and behavior may be added here as
+the Knave desktop develops; those features should be documented when they are
+implemented. The project does not claim that Knave-specific portal behavior is
+already present merely because this fork is intended to support Knave.
 
-Connects as a **standalone Wayland client** -- no compositor-side code changes
-or custom traits required.
+The backend connects to the compositor as a standalone Wayland client and uses
+standard Wayland protocols. This keeps portal implementation separate from
+Villain, Knave's compositor, unless a documented protocol change requires
+compositor support.
 
-Developed by [Lamco Development LLC](https://lamco.ai/open-source/xdg-desktop-portal-generic/)
-as part of the [lamco-rdp-server](https://lamco.ai/products/lamco-rdp-server/)
-ecosystem.
+Inherited crate, binary, and D-Bus identifiers still contain `generic` for
+compatibility with the forked implementation. They may be renamed only as a
+deliberate compatibility change covering packaging, activation, and existing
+consumers.
 
 ## Supported Portals
 
@@ -143,6 +148,11 @@ When correctly installed, `xdg-desktop-portal` will automatically activate
 `xdg-desktop-portal-generic` via D-Bus when an application requests a portal
 that is configured to use this backend.
 
+The executable, D-Bus name, and portal backend ID are still named `generic` in
+this fork. The example configuration below uses that current backend ID; it
+does not indicate that this project is still maintained as the upstream
+generic project.
+
 ### Manual Startup
 
 For development and testing, you can start it directly:
@@ -199,17 +209,18 @@ The color picker tool receives a PNG screenshot path on stdin. It should output
 `x y` coordinates (space-separated integers) on stdout. The color at those
 coordinates will be returned to the requesting application.
 
-## Compatible Compositors
+## Compositor Compatibility
 
-Designed for compositors that do not ship their own portal backend:
+The inherited implementation is designed for compositors that do not ship
+their own portal backend and expose the required standard protocols. Its
+protocols are detected at runtime; the capabilities available depend on the
+compositor and installed PipeWire/portal services.
 
-- **[COSMIC](https://github.com/pop-os/cosmic-epoch)** -- System76's desktop environment
-- **[Niri](https://github.com/YaLTeR/niri)** -- Scrollable-tiling Wayland compositor
-- **[Jay](https://github.com/mahkoh/jay)** -- Tiling Wayland compositor
-- Any Smithay-based compositor
-
-Works with **any** compositor that implements ext- or wlr- Wayland protocols.
-The `UseIn` list in `generic.portal` can be extended for additional compositors.
+Knave's Villain compositor is a target for this fork. Actual feature support
+must be checked against Villain's advertised protocols and validated in a live
+Knave session; compilation or protocol declarations alone do not establish
+end-to-end portal behavior. The `UseIn` list in `generic.portal` is retained
+for legacy portal frontend compatibility.
 
 ## Architecture
 
