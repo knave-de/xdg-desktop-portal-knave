@@ -359,16 +359,15 @@ impl State {
             "Compositor selection changed"
         );
 
-        if let Ok(mut shared) = self.shared_state.lock() {
+        // The callback runs after the lock is released: it may call back into
+        // the handle (`serial`, `selection_mime_types`), which locks the same state.
+        let callback = self.shared_state.lock().ok().and_then(|mut shared| {
             shared.serial += 1;
             shared.mime_types.clone_from(&mime_types);
-
-            // No let-chain: the MSRV (1.87) predates them.
-            if !own {
-                if let Some(ref callback) = shared.on_change {
-                    callback(mime_types);
-                }
-            }
+            if own { None } else { shared.on_change.clone() }
+        });
+        if let Some(callback) = callback {
+            callback(mime_types);
         }
     }
 
@@ -384,13 +383,13 @@ impl State {
 
         tracing::debug!("Compositor selection cleared");
 
-        if let Ok(mut shared) = self.shared_state.lock() {
+        let callback = self.shared_state.lock().ok().and_then(|mut shared| {
             shared.serial += 1;
             shared.mime_types.clear();
-
-            if let Some(ref callback) = shared.on_change {
-                callback(Vec::new());
-            }
+            shared.on_change.clone()
+        });
+        if let Some(callback) = callback {
+            callback(Vec::new());
         }
     }
 
@@ -767,6 +766,22 @@ mod tests {
         assert!(*called.lock().unwrap());
         assert!(state.shared_state.lock().unwrap().mime_types.is_empty());
         assert_eq!(state.shared_state.lock().unwrap().serial, 1);
+    }
+
+    #[test]
+    fn the_change_callback_may_lock_the_shared_state() {
+        let mut state = State::default();
+        let shared = Arc::clone(&state.shared_state);
+        let relocked = Arc::new(Mutex::new(false));
+        let seen = Arc::clone(&relocked);
+        state.shared_state.lock().unwrap().on_change = Some(Arc::new(move |_types| {
+            // A callback that reads the handle locks this state; it must not be held.
+            *seen.lock().unwrap() = shared.try_lock().is_ok();
+        }));
+
+        state.on_selection_cleared();
+
+        assert!(*relocked.lock().unwrap());
     }
 
     #[test]
