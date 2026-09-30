@@ -1,6 +1,6 @@
 # Changelog
 
-## [1.0.0]
+## [1.0.0] - 2026-09-30
 
 First release. Extracted from the clipboard client in
 `xdg-desktop-portal-generic` so it can be used without that project.
@@ -11,3 +11,5 @@ First release. Extracted from the clipboard client in
 - Delayed rendering through `on_transfer` and `TransferRequest`.
 - `find_mime_match` for charset-tolerant type matching.
 - Reads are size-limited and time out on a stalled source.
+- The change callback runs outside the shared-state lock, so it may call back
+  into the handle.
