@@ -1,13 +1,13 @@
 [package]
 name = "lamco-data-control"
-version = "1.0.0"
+version = "1.0.1"
 edition = "2024"
 authors = ["Greg Lamberson <greg@lamco.io>"]
 rust-version = "1.87"
 license = "MIT OR Apache-2.0"
 description = "Wayland data-control clipboard client (ext-data-control-v1 and wlr-data-control) with on-demand pastes"
 repository = "https://github.com/lamco-admin/xdg-desktop-portal-generic"
-homepage = "https://www.lamco.ai"
+homepage = "https://lamco.ai/open-source/xdg-desktop-portal-generic/"
 documentation = "https://docs.rs/lamco-data-control"
 readme = "README.md"
 keywords = ["wayland", "clipboard", "data-control", "wlroots", "selection"]

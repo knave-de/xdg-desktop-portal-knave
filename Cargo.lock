@@ -625,7 +625,7 @@ dependencies = [
 
 [[package]]
 name = "lamco-data-control"
-version = "1.0.0"
+version = "1.0.1"
 dependencies = [
  "nix 0.31.3",
  "thiserror",

@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.0.1] - 2026-09-30
+
+### Changed
+- `homepage` points at the lamco.ai page for the project this crate belongs to
+  (xdg-desktop-portal-generic) instead of the bare organisation homepage, and the
+  README carries the website, documentation and source links. No code change.
+
 ## [1.0.0] - 2026-09-30
 
 First release. Extracted from the clipboard client in

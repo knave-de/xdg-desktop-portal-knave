@@ -4,6 +4,8 @@
 [![Documentation](https://docs.rs/lamco-data-control/badge.svg)](https://docs.rs/lamco-data-control)
 [![License](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](#license)
 
+**[Website](https://lamco.ai/open-source/xdg-desktop-portal-generic/)** · **[Documentation](https://docs.rs/lamco-data-control)** · **[Source](https://github.com/lamco-admin/xdg-desktop-portal-generic/tree/master/crates/lamco-data-control)**
+
 A Wayland clipboard client built on the data-control protocols.
 
 ## Overview
@@ -88,8 +90,9 @@ The primary selection is not handled.
 
 ## About Lamco
 
-This crate is part of the Lamco RDP Server project. Lamco develops RDP server
-solutions for Wayland and Linux.
+This crate is part of the Lamco RDP Server project and is developed by Lamco
+Development LLC alongside [xdg-desktop-portal-generic](https://lamco.ai/open-source/xdg-desktop-portal-generic/).
+Lamco develops RDP server solutions for Wayland and Linux.
 
 **Open source foundation:** portal integration and protocol components.
 **Commercial products:** Lamco RDP Server, Lamco VDI.
