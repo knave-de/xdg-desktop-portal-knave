@@ -21,7 +21,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt
-      - run: cargo fmt --check
+      - run: cargo fmt --all --check
 
   clippy:
     runs-on: ubuntu-latest
@@ -36,7 +36,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y \
             libpipewire-0.3-dev libspa-0.2-dev libwayland-dev libxkbcommon-dev libclang-dev
-      - run: cargo clippy --all-targets --all-features -- -D warnings
+      - run: cargo clippy --workspace --all-targets --all-features -- -D warnings
 
   test:
     runs-on: ubuntu-latest
@@ -49,7 +49,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y \
             libpipewire-0.3-dev libspa-0.2-dev libwayland-dev libxkbcommon-dev libclang-dev
-      - run: cargo test --all-features
+      - run: cargo test --workspace --all-features
 
   doc:
     runs-on: ubuntu-latest
@@ -64,7 +64,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y \
             libpipewire-0.3-dev libspa-0.2-dev libwayland-dev libxkbcommon-dev libclang-dev
-      - run: cargo doc --no-deps --all-features
+      - run: cargo doc --workspace --no-deps --all-features
 
   msrv:
     runs-on: ubuntu-latest
@@ -101,4 +101,4 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y \
             libpipewire-0.3-dev libspa-0.2-dev libwayland-dev libxkbcommon-dev libclang-dev
-      - run: cargo package --all-features
+      - run: cargo package --workspace --all-features

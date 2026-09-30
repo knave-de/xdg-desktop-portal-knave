@@ -1,0 +1,13 @@
+# Changelog
+
+## [1.0.0]
+
+First release. Extracted from the clipboard client in
+`xdg-desktop-portal-generic` so it can be used without that project.
+
+- `DataControl` handle over a dedicated Wayland thread.
+- `ext-data-control-v1` and `wlr-data-control-unstable-v1`, chosen by
+  `Options`.
+- Delayed rendering through `on_transfer` and `TransferRequest`.
+- `find_mime_match` for charset-tolerant type matching.
+- Reads are size-limited and time out on a stalled source.
