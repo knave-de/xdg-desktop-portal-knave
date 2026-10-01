@@ -1,4 +1,4 @@
 [portal]
 DBusName=org.freedesktop.impl.portal.desktop.knave
-Interfaces=org.freedesktop.impl.portal.RemoteDesktop;org.freedesktop.impl.portal.ScreenCast;org.freedesktop.impl.portal.Clipboard;org.freedesktop.impl.portal.Settings;org.freedesktop.impl.portal.Screenshot;org.freedesktop.impl.portal.InputCapture;
-UseIn=knave;villain;cosmic;niri;jay;
+Interfaces=org.freedesktop.impl.portal.Settings;org.freedesktop.impl.portal.ScreenCast;org.freedesktop.impl.portal.Screenshot;
+UseIn=Knave;Villain;knave;villain;
