@@ -49,7 +49,52 @@ impl SettingsInterface {
 
     /// Read appearance settings from environment variables and defaults.
     fn read_appearance_settings() -> HashMap<String, OwnedValue> {
+        let canonical = knave_config::ConfigDocument::at_default_path();
         let mut appearance = HashMap::new();
+        if let Ok(document) = &canonical {
+            if document.path().exists() {
+                let portal = &document.config().portal;
+                let scheme = if crate::env::var("COLOR_SCHEME").is_ok() || portal.color_scheme == 0
+                {
+                    Self::detect_color_scheme()
+                } else {
+                    u32::from(portal.color_scheme)
+                };
+                appearance.insert("color-scheme".into(), OwnedValue::from(scheme));
+                let accent =
+                    crate::env::var("ACCENT_COLOR").unwrap_or_else(|_| portal.accent_color.clone());
+                let parts: Vec<f64> = accent
+                    .split(',')
+                    .filter_map(|s| s.trim().parse().ok())
+                    .collect();
+                if parts.len() == 3 {
+                    if let Ok(value) =
+                        OwnedValue::try_from(Value::from((parts[0], parts[1], parts[2])))
+                    {
+                        appearance.insert("accent-color".into(), value);
+                    }
+                }
+                appearance.insert(
+                    "contrast".into(),
+                    OwnedValue::from(if crate::env::var("CONTRAST").is_ok() {
+                        Self::detect_contrast()
+                    } else {
+                        u32::from(portal.high_contrast)
+                    }),
+                );
+                appearance.insert(
+                    "reduced-motion".into(),
+                    OwnedValue::from(if crate::env::var("REDUCED_MOTION").is_ok() {
+                        Self::detect_reduced_motion()
+                    } else {
+                        u32::from(portal.reduced_motion)
+                    }),
+                );
+                return appearance;
+            }
+        } else if let Err(error) = &canonical {
+            tracing::warn!(%error, "could not read canonical portal appearance");
+        }
 
         // color-scheme: 0=default, 1=dark, 2=light
         let color_scheme = Self::detect_color_scheme();
@@ -185,6 +230,10 @@ impl SettingsInterface {
     /// Returns a list of `(namespace, key, new_value)` tuples for each
     /// setting that differs from the currently cached value.
     pub fn refresh_from_env(&mut self) -> Vec<(String, String, OwnedValue)> {
+        if let Err(error) = knave_config::ConfigDocument::at_default_path() {
+            tracing::warn!(%error, "keeping the last valid portal appearance settings");
+            return Vec::new();
+        }
         let fresh = Self::read_appearance_settings();
         let mut changes = Vec::new();
 

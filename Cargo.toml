@@ -71,6 +71,12 @@ targets = ["x86_64-unknown-linux-gnu"]
 rustdoc-args = ["--cfg", "docsrs"]
 
 [dependencies]
+knave-config = { path = "../knave/crates/knave-config" }
+knave-portal-api = { path = "../knave/crates/knave-portal-api" }
+serde_json = "1"
+tempfile = "3.8"
+base64 = "0.22"
+png = "0.18"
 lamco-data-control = { version = "1.0.1", path = "crates/lamco-data-control" }
 # D-Bus service implementation
 zbus = { version = "5.2", features = ["tokio"] }
@@ -90,7 +96,7 @@ wayland-protocols-wlr = { version = "0.3", features = ["client"] }
 wayland-protocols-misc = { version = "0.3", features = ["client"] }
 
 # PipeWire (screen capture)
-pipewire = "0.10"
+pipewire = { version = "0.10", features = ["v0_3_34"] }
 libspa = "0.10"
 
 # Error handling
@@ -108,11 +114,10 @@ uuid = { version = "1.11", features = ["v4"] }
 # XKB keymap handling
 xkbcommon = { version = "0.9", features = ["wayland"] }
 
-# Image encoding (for Screenshot portal)
-png = "0.18"
+# Image encoding is shared with the picker.
 
 # System
-nix = { version = "0.31", features = ["socket", "poll", "fs", "mman", "time"] }
+nix = { version = "0.31", features = ["socket", "poll", "fs", "mman", "time", "inotify", "event"] }
 libc = "0.2"
 
 # Optional: kernel-level input injection via /dev/uinput
@@ -125,7 +130,6 @@ evdev = { version = "0.13", optional = true }
 uinput = ["dep:evdev"]
 
 [dev-dependencies]
-tempfile = "3.8"
 
 [profile.release]
 opt-level = 3

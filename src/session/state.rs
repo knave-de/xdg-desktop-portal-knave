@@ -86,6 +86,10 @@ impl std::fmt::Display for SessionState {
 /// portal connection.
 #[derive(Debug)]
 pub struct Session {
+    /// Cursor mode approved during SelectSources.
+    pub cursor_mode: crate::types::CursorMode,
+    /// Cancels consent or sharing UI on every session close path.
+    pub(crate) sharing_stop: Option<tokio::sync::watch::Sender<bool>>,
     /// Unique session ID (D-Bus object path).
     pub id: ObjectPath<'static>,
     /// D-Bus sender that created this session.
@@ -163,6 +167,8 @@ impl Session {
     /// Create a new session.
     pub fn new(id: ObjectPath<'static>, sender: String, app_id: String) -> Self {
         Self {
+            cursor_mode: crate::types::CursorMode::default(),
+            sharing_stop: None,
             id,
             sender,
             app_id,
@@ -422,6 +428,9 @@ impl Session {
 
     /// Close the session.
     pub fn close(&mut self) {
+        if let Some(stop) = self.sharing_stop.take() {
+            let _ = stop.send(true);
+        }
         if self.state != SessionState::Closed {
             tracing::info!(
                 session_id = %self.id,

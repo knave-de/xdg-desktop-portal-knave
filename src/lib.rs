@@ -74,6 +74,7 @@ pub mod dbus;
 pub(crate) mod env;
 pub mod error;
 pub mod health;
+mod picker;
 pub mod pipewire;
 pub mod services;
 pub mod session;
@@ -250,10 +251,37 @@ impl PortalBackend {
         );
         let pending_writes = clipboard_iface.pending_writes();
 
-        let connection = zbus::connection::Builder::session()?
+        let path = "/org/freedesktop/portal/desktop";
+        let mut builder = zbus::connection::Builder::session()?
             .name("org.freedesktop.impl.portal.desktop.knave")?
-            .serve_at(
-                "/org/freedesktop/portal/desktop",
+            .serve_at(path, SettingsInterface::new())?;
+        let capture = self.available_protocols.ext_image_copy_capture
+            || self.available_protocols.wlr_screencopy;
+        let input = self.available_protocols.zwp_virtual_keyboard
+            || self.available_protocols.wlr_virtual_pointer;
+        if capture {
+            builder = builder
+                .serve_at(
+                    path,
+                    ScreenCastInterface::new(
+                        Arc::clone(&self.session_manager),
+                        Arc::clone(&self.capture_backend),
+                        Arc::clone(&self.pipewire_manager),
+                        Arc::clone(&self.input_backend),
+                    )
+                    .with_capture_sender(self.capture_tx.clone()),
+                )?
+                .serve_at(
+                    path,
+                    ScreenshotInterface::new(
+                        Arc::clone(&self.capture_backend),
+                        self.capture_tx.clone(),
+                    ),
+                )?;
+        }
+        if input && capture {
+            builder = builder.serve_at(
+                path,
                 RemoteDesktopInterface::new(
                     Arc::clone(&self.session_manager),
                     Arc::clone(&self.input_backend),
@@ -261,39 +289,28 @@ impl PortalBackend {
                     Arc::clone(&self.pipewire_manager),
                     self.available_protocols.clone(),
                 ),
-            )?
-            .serve_at(
-                "/org/freedesktop/portal/desktop",
-                ScreenCastInterface::new(
-                    Arc::clone(&self.session_manager),
-                    Arc::clone(&self.capture_backend),
-                    Arc::clone(&self.pipewire_manager),
-                    Arc::clone(&self.input_backend),
-                ),
-            )?
-            .serve_at("/org/freedesktop/portal/desktop", clipboard_iface)?
-            .serve_at(
-                "/org/freedesktop/portal/desktop",
-                ScreenshotInterface::new(
-                    Arc::clone(&self.capture_backend),
-                    self.capture_tx.clone(),
-                ),
-            )?
-            .serve_at("/org/freedesktop/portal/desktop", SettingsInterface::new())?
-            .serve_at(
-                "/org/freedesktop/portal/desktop",
-                InputCaptureInterface::new(
-                    Arc::clone(&self.session_manager),
-                    Arc::clone(&self.input_backend),
-                    Arc::clone(&self.capture_backend),
-                    Arc::clone(&self.pipewire_manager),
-                    self.available_protocols.clone(),
-                    self.shared_wayland_state.clone(),
-                    self.input_capture_tx.clone(),
-                ),
-            )?
-            .build()
-            .await?;
+            )?;
+            if self.clipboard_backend.is_some() {
+                builder = builder.serve_at(path, clipboard_iface)?;
+            }
+            if self.available_protocols.wp_pointer_constraints
+                && self.available_protocols.wp_relative_pointer
+            {
+                builder = builder.serve_at(
+                    path,
+                    InputCaptureInterface::new(
+                        Arc::clone(&self.session_manager),
+                        Arc::clone(&self.input_backend),
+                        Arc::clone(&self.capture_backend),
+                        Arc::clone(&self.pipewire_manager),
+                        self.available_protocols.clone(),
+                        self.shared_wayland_state.clone(),
+                        self.input_capture_tx.clone(),
+                    ),
+                )?;
+            }
+        }
+        let connection = builder.build().await?;
 
         tracing::info!(
             "Portal backend started on {}",
@@ -369,8 +386,7 @@ impl PortalBackend {
             Self::periodic_session_cleanup(session_manager).await;
         });
 
-        // Spawn settings monitoring task (re-reads env vars periodically,
-        // emits SettingChanged signals when values change)
+        // Watch canonical appearance writes and emit SettingChanged.
         let settings_conn = connection.clone();
         tokio::spawn(async move {
             Self::monitor_settings_changes(settings_conn).await;
@@ -394,8 +410,8 @@ impl PortalBackend {
             });
         }
 
-        // Wait forever (or until connection is dropped)
-        std::future::pending::<()>().await;
+        // A lost bus ends this service and lets main release capture resources.
+        connection.closed().await;
 
         Ok(())
     }
@@ -435,7 +451,7 @@ impl PortalBackend {
         while let Some(signal) = name_owner_changed.next().await {
             if let Ok(args) = signal.args() {
                 // A client disconnected when new_owner is empty
-                if args.new_owner.as_ref().map(zbus::names::UniqueName::as_str) == Some("") {
+                if args.new_owner.is_none() {
                     let disconnected_name = args.name.as_str();
                     tracing::debug!(
                         name = %disconnected_name,
@@ -972,55 +988,80 @@ impl PortalBackend {
         );
     }
 
-    /// Monitor settings for runtime changes and emit SettingChanged signals.
-    ///
-    /// Re-reads environment variables every 10 seconds and emits D-Bus
-    /// signals for any settings that have changed. This allows external
-    /// tools to update appearance settings by modifying env vars and
-    /// signaling the portal process.
+    /// Watch canonical configuration writes, including atomic rename, without polling.
     async fn monitor_settings_changes(connection: zbus::Connection) {
-        use std::time::Duration;
-        let mut interval = tokio::time::interval(Duration::from_secs(10));
-
-        // Skip the first immediate tick (settings were just initialized)
-        interval.tick().await;
-
+        use nix::sys::inotify::{AddWatchFlags, InitFlags, Inotify};
+        use std::os::fd::{AsFd, AsRawFd};
+        struct Watch(Inotify);
+        impl AsRawFd for Watch {
+            fn as_raw_fd(&self) -> std::os::fd::RawFd {
+                self.0.as_fd().as_raw_fd()
+            }
+        }
+        let setup = || -> anyhow::Result<_> {
+            let path = knave_config::ConfigDocument::default_path()?;
+            let directory = path
+                .parent()
+                .ok_or_else(|| anyhow::anyhow!("config has no parent"))?;
+            std::fs::create_dir_all(directory)?;
+            let notify = Inotify::init(InitFlags::IN_NONBLOCK | InitFlags::IN_CLOEXEC)?;
+            notify.add_watch(
+                directory,
+                AddWatchFlags::IN_CLOSE_WRITE
+                    | AddWatchFlags::IN_MOVED_TO
+                    | AddWatchFlags::IN_DELETE,
+            )?;
+            Ok((tokio::io::unix::AsyncFd::new(Watch(notify))?, path))
+        };
+        let (notify, path) = match setup() {
+            Ok(value) => value,
+            Err(error) => {
+                tracing::warn!(%error, "appearance watcher unavailable");
+                return;
+            }
+        };
         loop {
-            interval.tick().await;
-
-            let iface_ref = connection
+            let Ok(mut ready) = notify.readable().await else {
+                break;
+            };
+            let events = match ready.try_io(|inner| {
+                inner
+                    .get_ref()
+                    .0
+                    .read_events()
+                    .map_err(std::io::Error::from)
+            }) {
+                Ok(Ok(events)) => events,
+                Ok(Err(error)) => {
+                    tracing::warn!(%error, "appearance watcher failed");
+                    break;
+                }
+                Err(_) => continue,
+            };
+            if !events
+                .iter()
+                .any(|event| event.name.as_deref() == path.file_name())
+            {
+                continue;
+            }
+            let Ok(iface) = connection
                 .object_server()
                 .interface::<_, dbus::SettingsInterface>("/org/freedesktop/portal/desktop")
-                .await;
-
-            let Ok(iface) = iface_ref else {
-                continue;
+                .await
+            else {
+                break;
             };
-
-            // Refresh settings and collect changes
-            let changes = {
-                let mut iface_mut = iface.get_mut().await;
-                iface_mut.refresh_from_env()
-            };
-
-            // Emit signals for each changed setting
-            if !changes.is_empty() {
-                let ctx = iface.signal_emitter();
-                for (namespace, key, value) in &changes {
-                    tracing::info!(
-                        namespace = %namespace,
-                        key = %key,
-                        "Setting changed, emitting SettingChanged signal"
-                    );
-                    if let Err(e) =
-                        dbus::SettingsInterface::setting_changed(ctx, namespace, key, value.clone())
-                            .await
-                    {
-                        tracing::warn!(
-                            error = %e,
-                            "Failed to emit SettingChanged signal"
-                        );
-                    }
+            let changes = iface.get_mut().await.refresh_from_env();
+            for (namespace, key, value) in changes {
+                if let Err(error) = dbus::SettingsInterface::setting_changed(
+                    iface.signal_emitter(),
+                    &namespace,
+                    &key,
+                    value,
+                )
+                .await
+                {
+                    tracing::warn!(%error, "could not emit appearance update");
                 }
             }
         }
@@ -1043,4 +1084,28 @@ impl PortalBackend {
             }
         }
     }
+}
+
+/// Serve appearance independently of capture, input and PipeWire availability.
+pub async fn run_settings_service() -> anyhow::Result<()> {
+    env::warn_on_legacy_settings();
+    let connection = zbus::connection::Builder::session()?
+        .name("org.freedesktop.impl.portal.desktop.knave")?
+        .serve_at(
+            "/org/freedesktop/portal/desktop",
+            dbus::SettingsInterface::new(),
+        )?
+        .build()
+        .await?;
+    tokio::select! {
+        () = PortalBackend::monitor_settings_changes(connection.clone()) => {},
+        () = connection.closed() => {},
+        _ = tokio::signal::ctrl_c() => {},
+        () = async {
+            if let Ok(mut signal) = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) {
+                signal.recv().await;
+            } else { std::future::pending::<()>().await; }
+        } => {},
+    }
+    Ok(())
 }

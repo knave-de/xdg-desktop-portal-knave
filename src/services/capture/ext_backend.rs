@@ -74,85 +74,106 @@ impl CaptureBackend for ExtCaptureBackend {
         sources: &[SourceInfo],
         cursor_mode: CursorMode,
     ) -> Result<Vec<StreamInfo>> {
-        let mut streams = Vec::new();
-
+        if sources.is_empty() || self.active_streams.len() + sources.len() > 8 {
+            return Err(PortalError::PipeWire(
+                "capture stream budget exceeded".into(),
+            ));
+        }
         for source in sources {
-            // Verify source exists
             if !self.sources.iter().any(|s| s.id == source.id) {
                 return Err(PortalError::SourceNotFound(source.id));
             }
-
-            // Create a real PipeWire stream via the manager.
-            let config = crate::pipewire::StreamConfig {
-                source_id: source.id,
-                width: source.width,
-                height: source.height,
-                framerate: 30,
-            };
-
-            let stream_ids = {
-                let pw = Arc::clone(&self.pipewire);
-                let rt = tokio::runtime::Handle::try_current();
-                match rt {
-                    // The capture trait method is sync but is invoked from the
-                    // zbus async handler; bridge to the async PipeWire call via
-                    // block_in_place so we do not start a runtime within a runtime.
-                    Ok(handle) => {
-                        tokio::task::block_in_place(|| handle.block_on(pw.create_stream(config)))
-                            .map_err(|e| {
-                                PortalError::PipeWire(format!("Failed to create stream: {e}"))
-                            })?
-                    }
-                    Err(_) => {
-                        return Err(PortalError::PipeWire(
-                            "Cannot create PipeWire stream outside async context".to_string(),
-                        ));
-                    }
+        }
+        let mut streams = Vec::new();
+        let result = (|| {
+            for source in sources {
+                // Verify source exists
+                if !self.sources.iter().any(|s| s.id == source.id) {
+                    return Err(PortalError::SourceNotFound(source.id));
                 }
-            };
-            let node_id = stream_ids.node_id;
 
-            let stream = StreamInfo {
-                node_id,
-                serial: stream_ids.serial,
-                source_id: source.id,
-                position: (source.x, source.y),
-                size: (source.width, source.height),
-                source_type: source.source_type,
-                mapping_id: Some(format!("output:{}", source.name)),
-                scale: source.scale,
-                properties: HashMap::new(),
-            };
+                // Create a real PipeWire stream via the manager.
+                let config = crate::pipewire::StreamConfig {
+                    source_id: source.id,
+                    width: source.width,
+                    height: source.height,
+                    framerate: 30,
+                };
 
-            tracing::info!(
-                node_id = node_id,
-                source_id = source.id,
-                source_name = %source.name,
-                protocol = "ext-image-copy-capture",
-                "Created capture stream with real PipeWire node"
-            );
+                let stream_ids = {
+                    let pw = Arc::clone(&self.pipewire);
+                    let rt = tokio::runtime::Handle::try_current();
+                    match rt {
+                        // The capture trait method is sync but is invoked from the
+                        // zbus async handler; bridge to the async PipeWire call via
+                        // block_in_place so we do not start a runtime within a runtime.
+                        Ok(handle) => tokio::task::block_in_place(|| {
+                            handle.block_on(pw.create_stream(config))
+                        })
+                        .map_err(|e| {
+                            PortalError::PipeWire(format!("Failed to create stream: {e}"))
+                        })?,
+                        Err(_) => {
+                            return Err(PortalError::PipeWire(
+                                "Cannot create PipeWire stream outside async context".to_string(),
+                            ));
+                        }
+                    }
+                };
+                let node_id = stream_ids.node_id;
 
-            // Start frame capture via the Wayland event loop.
-            // Currently uses wlr-screencopy on the event loop side; ext-specific
-            // capture will be added when ext Dispatch impls are implemented.
-            if let Err(e) = self.capture_tx.send(CaptureCommand::StartCapture {
-                output_global_name: source.id,
-                node_id,
-                width: source.width,
-                height: source.height,
-                cursor_mode,
-            }) {
-                tracing::error!(
+                let stream = StreamInfo {
                     node_id,
-                    error = %e,
-                    "Failed to send StartCapture command to event loop"
+                    serial: stream_ids.serial,
+                    source_id: source.id,
+                    position: (source.x, source.y),
+                    size: (source.width, source.height),
+                    source_type: source.source_type,
+                    mapping_id: Some(format!("output:{}", source.name)),
+                    scale: source.scale,
+                    properties: HashMap::new(),
+                };
+
+                tracing::info!(
+                    node_id = node_id,
+                    source_id = source.id,
+                    source_name = %source.name,
+                    protocol = "ext-image-copy-capture",
+                    "Created capture stream with real PipeWire node"
                 );
+
+                // Start frame capture via the Wayland event loop.
+                // The event loop dispatches the negotiated capture protocol.
+                if let Err(e) = self.capture_tx.send(CaptureCommand::StartCapture {
+                    output_global_name: source.id,
+                    node_id,
+                    width: source.width,
+                    height: source.height,
+                    cursor_mode,
+                }) {
+                    tracing::error!(
+                        node_id,
+                        error = %e,
+                        "Failed to send StartCapture command to event loop"
+                    );
+                    self.active_streams.insert(node_id, stream.clone());
+                    streams.push(stream);
+                    return Err(PortalError::PipeWire(
+                        "capture event loop disconnected".into(),
+                    ));
+                }
+
+                self.active_streams.insert(node_id, stream.clone());
+                streams.push(stream);
             }
 
-            self.active_streams.insert(node_id, stream.clone());
-            streams.push(stream);
+            Ok(())
+        })();
+        if let Err(error) = result {
+            let ids: Vec<_> = streams.iter().map(|s| s.node_id).collect();
+            let _ = self.destroy_capture_session(&ids);
+            return Err(error);
         }
-
         Ok(streams)
     }
 
@@ -188,10 +209,8 @@ impl CaptureBackend for ExtCaptureBackend {
     }
 
     fn available_cursor_modes(&self) -> u32 {
-        // ext-image-copy-capture supports all cursor modes
-        CursorMode::Hidden.to_bits()
-            | CursorMode::Embedded.to_bits()
-            | CursorMode::Metadata.to_bits()
+        // Metadata requires a separate cursor stream, which is not implemented.
+        CursorMode::Hidden.to_bits() | CursorMode::Embedded.to_bits()
     }
 
     fn update_sources(&mut self, sources: Vec<SourceInfo>) {

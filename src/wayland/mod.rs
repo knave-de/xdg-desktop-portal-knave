@@ -193,6 +193,7 @@ pub type Result<T> = std::result::Result<T, PortalError>;
 pub struct WaylandConnection {
     /// The underlying Wayland connection.
     connection: Connection,
+    disconnected: Arc<tokio::sync::Notify>,
     /// The global list from initial registry scan.
     globals: GlobalList,
     /// Event queue for dispatching protocol events.
@@ -292,6 +293,7 @@ impl WaylandConnection {
 
         Ok(Self {
             connection,
+            disconnected: Arc::new(tokio::sync::Notify::new()),
             globals,
             event_queue,
             queue_handle,
@@ -589,6 +591,11 @@ impl WaylandConnection {
         protocols
     }
 
+    /// Notification when this Wayland worker terminates.
+    pub fn disconnected(&self) -> Arc<tokio::sync::Notify> {
+        Arc::clone(&self.disconnected)
+    }
+
     /// Get detected available protocols.
     pub fn available_protocols(&self) -> &AvailableProtocols {
         &self.available_protocols
@@ -873,6 +880,8 @@ impl WaylandConnection {
             }
         }
 
+        stop.store(true, Ordering::Relaxed);
+        self.disconnected.notify_one();
         tracing::info!("Wayland event loop stopped");
     }
 

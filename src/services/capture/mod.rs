@@ -190,15 +190,7 @@ pub fn create_capture_backend(
                 sources, pipewire, capture_tx,
             )))
         }
-        Err(e) => {
-            tracing::warn!("Capture protocol selection failed: {}", e);
-            // Return a backend that reports no sources rather than hard-failing
-            Ok(Box::new(ExtCaptureBackend::new(
-                vec![],
-                pipewire,
-                capture_tx,
-            )))
-        }
+        Err(e) => Err(e),
     }
 }
 

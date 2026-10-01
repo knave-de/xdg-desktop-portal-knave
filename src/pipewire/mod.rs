@@ -131,7 +131,9 @@ impl std::fmt::Debug for PipeWireCommand {
 /// event system for zero-latency wakeups.
 pub struct PipeWireManager {
     /// Command sender to the PipeWire thread.
-    command_tx: mpsc::Sender<PipeWireCommand>,
+    command_tx: mpsc::SyncSender<PipeWireCommand>,
+    wake: Arc<nix::sys::eventfd::EventFd>,
+    stopped: Arc<tokio::sync::Notify>,
     /// Whether the manager is running.
     running: Arc<AtomicBool>,
     /// Thread join handle.
@@ -145,16 +147,28 @@ impl PipeWireManager {
     /// then enters the event loop. Commands are processed via a
     /// `pipewire::channel` receiver attached to the main loop.
     pub fn start() -> Result<Self, PortalError> {
-        let (command_tx, command_rx) = mpsc::channel::<PipeWireCommand>();
+        let (command_tx, command_rx) = mpsc::sync_channel::<PipeWireCommand>(4);
+        let wake = Arc::new(
+            nix::sys::eventfd::EventFd::from_flags(
+                nix::sys::eventfd::EfdFlags::EFD_CLOEXEC
+                    | nix::sys::eventfd::EfdFlags::EFD_NONBLOCK,
+            )
+            .map_err(|e| PortalError::PipeWire(e.to_string()))?,
+        );
+        let thread_wake = Arc::clone(&wake);
+        let stopped = Arc::new(tokio::sync::Notify::new());
+        let thread_stopped = Arc::clone(&stopped);
         let running = Arc::new(AtomicBool::new(true));
         let running_clone = Arc::clone(&running);
 
         let thread_handle = thread::Builder::new()
             .name("pipewire-main".to_string())
             .spawn(move || {
-                if let Err(e) = Self::run_thread(&command_rx, &running_clone) {
+                if let Err(e) = Self::run_thread(&command_rx, &running_clone, thread_wake) {
                     tracing::error!("PipeWire thread exited with error: {}", e);
                 }
+                running_clone.store(false, Ordering::Relaxed);
+                thread_stopped.notify_one();
             })
             .map_err(|e| PortalError::PipeWire(format!("Failed to spawn PipeWire thread: {e}")))?;
 
@@ -162,6 +176,8 @@ impl PipeWireManager {
 
         Ok(Self {
             command_tx,
+            wake,
+            stopped,
             running,
             thread_handle: Some(thread_handle),
         })
@@ -171,7 +187,7 @@ impl PipeWireManager {
     ///
     /// Uses a manual iterate loop with `std::sync::mpsc` for commands.
     /// pipewire-rs 0.10 uses lifetime-bound Box types that prevent Clone/move
-    /// into closures, so we poll for commands on each loop iteration.
+    /// into closures, with eventfd wakeups for bounded commands.
     #[expect(
         clippy::too_many_lines,
         reason = "PipeWire setup is inherently sequential"
@@ -179,6 +195,7 @@ impl PipeWireManager {
     fn run_thread(
         command_rx: &mpsc::Receiver<PipeWireCommand>,
         running: &Arc<AtomicBool>,
+        wake: Arc<nix::sys::eventfd::EventFd>,
     ) -> Result<(), PortalError> {
         let mainloop = pipewire::main_loop::MainLoopBox::new(None)
             .map_err(|e| PortalError::PipeWire(format!("Failed to create main loop: {e}")))?;
@@ -192,14 +209,42 @@ impl PipeWireManager {
 
         tracing::info!("Connected to PipeWire daemon");
 
+        let worker_running = Arc::clone(running);
+        let worker_wake = Arc::clone(&wake);
+        let _core_listener = core
+            .add_listener_local()
+            .error(move |id, _, result, message| {
+                if id == 0 || result == -libc::EPIPE || result == -libc::ECONNRESET {
+                    tracing::warn!(%message, "PipeWire connection lost");
+                    worker_running.store(false, Ordering::Relaxed);
+                    let _ = worker_wake.write(1);
+                }
+            })
+            .register();
         let mut streams: HashMap<u32, stream::PipeWireVideoStream> = HashMap::new();
 
-        // Manual event loop: process PipeWire events + poll commands
+        let _wake_source =
+            mainloop
+                .loop_()
+                .add_io(wake, libspa::support::system::IoFlags::IN, |fd| {
+                    let _ = fd.read();
+                });
+        // Sleep until a PipeWire event or a bounded command wakes the loop.
         while running.load(Ordering::Relaxed) {
             // Process all pending commands
             while let Ok(command) = command_rx.try_recv() {
                 match command {
                     PipeWireCommand::CreateStream { config, reply } => {
+                        if streams.len() >= 8
+                            || config.width == 0
+                            || config.height == 0
+                            || u64::from(config.width) * u64::from(config.height) > 8 * 1024 * 1024
+                        {
+                            let _ = reply.send(Err(PortalError::PipeWire(
+                                "capture stream budget exceeded".into(),
+                            )));
+                            continue;
+                        }
                         let result = stream::PipeWireVideoStream::create(&core, &config);
                         match result {
                             Ok(mut pw_stream) => {
@@ -324,9 +369,9 @@ impl PipeWireManager {
             }
 
             // Run one PipeWire main loop iteration (process stream events)
-            mainloop
-                .loop_()
-                .iterate(Timeout::Finite(Duration::from_millis(10)));
+            if running.load(Ordering::Relaxed) {
+                mainloop.loop_().iterate(Timeout::Infinite);
+            }
         }
 
         // Clean up all streams before dropping core/context
@@ -375,30 +420,46 @@ impl PipeWireManager {
     /// available, its `object.serial`).
     pub async fn create_stream(&self, config: StreamConfig) -> Result<StreamIds, PortalError> {
         let (reply_tx, reply_rx) = oneshot::channel();
-        self.command_tx
-            .send(PipeWireCommand::CreateStream {
-                config,
-                reply: reply_tx,
-            })
-            .map_err(|_| PortalError::PipeWire("PipeWire thread not running".to_string()))?;
+        self.send(PipeWireCommand::CreateStream {
+            config,
+            reply: reply_tx,
+        })
+        .map_err(|_| PortalError::PipeWire("PipeWire thread not running".to_string()))?;
 
-        reply_rx
+        tokio::time::timeout(Duration::from_secs(2), reply_rx)
             .await
+            .map_err(|_| PortalError::PipeWire("PipeWire command timed out".into()))?
             .map_err(|_| PortalError::PipeWire("PipeWire thread dropped reply".to_string()))?
+    }
+
+    fn send(&self, command: PipeWireCommand) -> Result<(), PortalError> {
+        if !self.is_running() {
+            return Err(PortalError::PipeWire("PipeWire worker stopped".into()));
+        }
+        self.command_tx.try_send(command).map_err(|_| {
+            PortalError::PipeWire("PipeWire command queue is full or disconnected".into())
+        })?;
+        let _ = self.wake.write(1);
+        Ok(())
+    }
+
+    /// Notification when the PipeWire worker terminates.
+    pub fn stopped(&self) -> Arc<tokio::sync::Notify> {
+        Arc::clone(&self.stopped)
     }
 
     /// Destroy a stream by node ID.
     pub async fn destroy_stream(&self, node_id: u32) -> Result<(), PortalError> {
         let (reply_tx, reply_rx) = oneshot::channel();
-        self.command_tx
-            .send(PipeWireCommand::DestroyStream {
-                node_id,
-                reply: reply_tx,
-            })
-            .map_err(|_| PortalError::PipeWire("PipeWire thread not running".to_string()))?;
+        self.send(PipeWireCommand::DestroyStream {
+            node_id,
+            reply: reply_tx,
+        })
+        .map_err(|_| PortalError::PipeWire("PipeWire thread not running".to_string()))?;
 
-        reply_rx
+        tokio::time::timeout(Duration::from_secs(2), reply_rx)
             .await
+            .map_err(|_| PortalError::PipeWire("PipeWire command timed out".into()))?
             .map_err(|_| PortalError::PipeWire("PipeWire thread dropped reply".to_string()))?
     }
 
@@ -412,7 +473,7 @@ impl PipeWireManager {
         stride: u32,
         format: u32,
     ) {
-        let _ = self.command_tx.send(PipeWireCommand::QueueBuffer {
+        let _ = self.send(PipeWireCommand::QueueBuffer {
             node_id,
             data,
             width,
@@ -425,12 +486,12 @@ impl PipeWireManager {
     /// Get a PipeWire remote connection fd for a client.
     pub async fn open_remote(&self) -> Result<OwnedFd, PortalError> {
         let (reply_tx, reply_rx) = oneshot::channel();
-        self.command_tx
-            .send(PipeWireCommand::OpenRemote { reply: reply_tx })
+        self.send(PipeWireCommand::OpenRemote { reply: reply_tx })
             .map_err(|_| PortalError::PipeWire("PipeWire thread not running".to_string()))?;
 
-        reply_rx
+        tokio::time::timeout(Duration::from_secs(2), reply_rx)
             .await
+            .map_err(|_| PortalError::PipeWire("PipeWire command timed out".into()))?
             .map_err(|_| PortalError::PipeWire("PipeWire thread dropped reply".to_string()))?
     }
 
@@ -441,7 +502,8 @@ impl PipeWireManager {
 
     /// Shut down the PipeWire manager.
     pub fn shutdown(&self) {
-        let _ = self.command_tx.send(PipeWireCommand::Shutdown);
+        self.running.store(false, Ordering::Relaxed);
+        let _ = self.wake.write(1);
     }
 }
 

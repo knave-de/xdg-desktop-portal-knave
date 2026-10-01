@@ -6,17 +6,10 @@
 //! session handle path. This allows clients and the frontend to close sessions
 //! via the D-Bus interface.
 
-use std::{
-    collections::HashMap,
-    sync::{Arc, mpsc},
-};
+use std::sync::{Arc, mpsc};
 
 use tokio::sync::Mutex;
-use zbus::{
-    interface,
-    object_server::SignalEmitter,
-    zvariant::{ObjectPath, Value},
-};
+use zbus::{interface, object_server::SignalEmitter, zvariant::ObjectPath};
 
 use crate::{
     pipewire::PipeWireManager,
@@ -122,8 +115,7 @@ impl SessionInterface {
         }
 
         // Emit the Closed signal
-        let details: HashMap<&str, Value<'_>> = HashMap::new();
-        let _ = Self::closed(&emitter, details).await;
+        let _ = Self::closed(&emitter).await;
 
         // Remove this session object from the D-Bus bus
         let _ = server.remove::<Self, _>(&self.session_handle).await;
@@ -138,10 +130,7 @@ impl SessionInterface {
 
     /// Signal emitted when the session is closed.
     #[zbus(signal)]
-    async fn closed(
-        emitter: &SignalEmitter<'_>,
-        details: HashMap<&str, Value<'_>>,
-    ) -> zbus::Result<()>;
+    async fn closed(emitter: &SignalEmitter<'_>) -> zbus::Result<()>;
 
     // === Properties ===
 

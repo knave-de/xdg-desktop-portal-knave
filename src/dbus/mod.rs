@@ -13,7 +13,7 @@ mod input_capture;
 mod remote_desktop;
 mod request;
 mod screencast;
-mod screenshot;
+pub(crate) mod screenshot;
 mod session;
 mod settings;
 
