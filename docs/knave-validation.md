@@ -60,7 +60,7 @@ Manual native clicks in a desktop session, direct-TTY/login/reboot activation,
 multiple physical outputs, transformed/scaled physical outputs, window contents
 changing over time, OBS/browser and sandbox application workflows remain unverified.
 Window sharing, RemoteDesktop/InputCapture, cursor metadata, DMA-BUF capture and
-native color picking remain deferred. Resize requires a new screencast session;
+native color picking remain deferred. Resolution changes require restarting the backend and recreating the session;
 live PipeWire format renegotiation is not implemented. The standard capture globals
 use Villain's existing trusted Wayland client boundary; security-context filtering
 is not introduced here.
