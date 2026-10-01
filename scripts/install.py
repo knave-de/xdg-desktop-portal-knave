@@ -58,3 +58,7 @@ for path, contents in files.items():
     print(staged)
 if args.prefix is None and args.destdir == Path('/'):
     subprocess.run(['systemctl', '--user', 'daemon-reload'], check=True)
+    # An already running bus may not watch a service directory created today.
+    # Reload discovery without restarting the bus or any desktop services.
+    subprocess.run(['busctl', '--user', 'call', 'org.freedesktop.DBus',
+                    '/org/freedesktop/DBus', 'org.freedesktop.DBus', 'ReloadConfig'], check=True)

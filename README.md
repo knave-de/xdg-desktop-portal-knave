@@ -107,7 +107,8 @@ Install matching Villain, Knave, and Knave Shell binaries first using their
 | D-Bus activation | `~/.local/share/dbus-1/services/org.freedesktop.impl.portal.desktop.knave.service` |
 | User unit | `$XDG_CONFIG_HOME/systemd/user/xdg-desktop-portal-knave.service` (normally `~/.config`) |
 
-The installer generates absolute executable paths, reloads user units, and does
+The installer generates absolute executable paths, reloads user units and D-Bus
+service discovery without restarting the bus or desktop services, and does
 not enable a global startup service. Existing user routing overrides are preserved.
 Use `--prefix PATH --destdir STAGE` for packaging; generated paths refer to PATH,
 not STAGE. Uninstall with `./scripts/install.py --user --uninstall`.
