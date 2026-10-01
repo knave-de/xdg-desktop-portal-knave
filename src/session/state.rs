@@ -16,7 +16,7 @@ use crate::{
 /// Serialized on D-Bus as `(suv)`: (vendor, version, data).
 #[derive(Debug, Clone)]
 pub struct RestoreData {
-    /// Vendor identifier (always `"generic"` for this backend).
+    /// Vendor identifier (always `"knave"` for newly generated data).
     pub vendor: String,
     /// Data format version.
     pub version: u32,
@@ -444,7 +444,7 @@ mod tests {
 
     fn test_session() -> Session {
         Session::new(
-            ObjectPath::try_from("/org/freedesktop/portal/generic/session/test").unwrap(),
+            ObjectPath::try_from("/org/freedesktop/portal/knave/session/test").unwrap(),
             ":1.123".to_string(),
             "com.example.app".to_string(),
         )

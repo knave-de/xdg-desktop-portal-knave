@@ -456,7 +456,7 @@ impl InputCaptureBarrierState {
                 &wl_surface,
                 Some(&output),
                 zwlr_layer_shell_v1::Layer::Overlay,
-                "xdp-generic-input-capture".to_string(),
+                "xdp-knave-input-capture".to_string(),
                 qh,
                 (session_id.to_string(), barrier.barrier_id),
             );

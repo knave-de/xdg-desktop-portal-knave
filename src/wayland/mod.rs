@@ -317,9 +317,8 @@ impl WaylandConnection {
     /// Must be called before `spawn_event_loop*`/`run_event_loop` --
     /// mirrors [`Self::set_health_sender`]'s pre-spawn-only convention.
     /// Deliberately does *not* add a 7th element to `spawn_event_loop`'s
-    /// return tuple: that tuple is destructured positionally by an external
-    /// consumer (`lamco-rdp-server-dev`'s `portal_generic.rs`), so any new
-    /// channel must be configured this way instead.
+    /// return tuple: downstream users may destructure that tuple positionally,
+    /// so any new channel must be configured this way instead.
     pub fn create_input_capture_channel(&mut self) -> mpsc::Sender<InputCaptureCommand> {
         let (tx, rx) = mpsc::channel();
         self.input_capture_rx = Some(rx);

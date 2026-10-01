@@ -84,13 +84,13 @@ impl CapturePreference {
     /// Create preferences from environment variables.
     ///
     /// Reads:
-    /// - `XDP_GENERIC_CAPTURE_PROTOCOL`: "ext" or "wlr"
-    /// - `XDP_GENERIC_CAPTURE_NO_FALLBACK`: "1" to disable fallback
-    /// - `XDP_GENERIC_CAPTURE_TIMEOUT_MS`: handshake timeout in milliseconds
+    /// - `XDP_KNAVE_CAPTURE_PROTOCOL`: "ext" or "wlr"
+    /// - `XDP_KNAVE_CAPTURE_NO_FALLBACK`: "1" to disable fallback
+    /// - `XDP_KNAVE_CAPTURE_TIMEOUT_MS`: handshake timeout in milliseconds
     pub fn from_env() -> Self {
         let mut prefs = Self::default();
 
-        if let Ok(protocol) = std::env::var("XDP_GENERIC_CAPTURE_PROTOCOL") {
+        if let Ok(protocol) = crate::env::var("CAPTURE_PROTOCOL") {
             match protocol.to_lowercase().as_str() {
                 "ext" | "ext-image-copy-capture" => {
                     prefs.preferred = Some(CaptureProtocol::ExtImageCopyCapture);
@@ -102,11 +102,11 @@ impl CapturePreference {
             }
         }
 
-        if std::env::var("XDP_GENERIC_CAPTURE_NO_FALLBACK").is_ok() {
+        if crate::env::var("CAPTURE_NO_FALLBACK").is_ok() {
             prefs.allow_fallback = false;
         }
 
-        if let Ok(timeout) = std::env::var("XDP_GENERIC_CAPTURE_TIMEOUT_MS") {
+        if let Ok(timeout) = crate::env::var("CAPTURE_TIMEOUT_MS") {
             if let Ok(ms) = timeout.parse::<u64>() {
                 prefs.handshake_timeout_ms = ms;
             }

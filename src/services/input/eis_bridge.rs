@@ -274,8 +274,7 @@ impl EisBridgeBackend {
             // `EisSession::accumulate_scroll_discrete`), neither available to
             // this pure function -- reaching any of the three here means it
             // was already staged or logged there, so returning no additional
-            // event is correct, not a gap. See EI-TEXT-SCOPING-2026-09-07.md
-            // in lamco-admin for the text pair.
+            // event is correct, not a gap.
             EisRequest::Disconnect
             | EisRequest::Bind(_)
             | EisRequest::Frame(_)
@@ -563,8 +562,7 @@ impl InputBackend for EisBridgeBackend {
                             // than a raw ei_keyboard.key). Handled here rather than in
                             // eis_request_to_input_event because resolving a keysym may
                             // need to dynamically extend the wlr keymap, which needs
-                            // &mut self.wlr -- see EI-TEXT-SCOPING-2026-09-07.md in
-                            // lamco-admin for why this exists and what it fixes.
+                            // &mut self.wlr.
                             EisRequest::TextKeysym(text_keysym) => {
                                 if session.is_receiver() {
                                     tracing::warn!(

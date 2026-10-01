@@ -69,7 +69,7 @@ impl SessionManager {
         // D-Bus object paths can only contain alphanumeric and underscores
         // Replace hyphens in UUID with underscores
         let uuid_str = uuid.to_string().replace('-', "_");
-        let path = format!("/org/freedesktop/portal/generic/session/s{id}_{uuid_str}");
+        let path = format!("/org/freedesktop/portal/knave/session/s{id}_{uuid_str}");
         // Path is constructed from a known-valid prefix + sanitized UUID.
         #[expect(
             clippy::expect_used,

@@ -29,24 +29,26 @@
 //! Protocol selection is automatic based on compositor capabilities. Override via
 //! environment variables:
 //!
-//! - `XDP_GENERIC_CAPTURE_PROTOCOL=ext|wlr` - Force capture protocol
-//! - `XDP_GENERIC_CAPTURE_NO_FALLBACK=1` - Disable capture fallback
-//! - `XDP_GENERIC_CAPTURE_TIMEOUT_MS=5000` - Ext-capture handshake timeout
-//! - `XDP_GENERIC_INPUT_PROTOCOL=eis|wlr` - Force input protocol
-//! - `XDP_GENERIC_INPUT_NO_FALLBACK=1` - Disable input fallback
-//! - `XDP_GENERIC_CLIPBOARD_PROTOCOL=ext|wlr` - Force clipboard protocol
-//! - `XDP_GENERIC_CLIPBOARD_NO_FALLBACK=1` - Disable clipboard fallback
-//! - `XDP_GENERIC_SOURCE_PICKER` - Path to external source picker tool
-//! - `XDP_GENERIC_COLOR_PICKER` - Path to external color picker tool
-//! - `XDP_GENERIC_COLOR_SCHEME` - Override color-scheme setting (0/1/2)
-//! - `XDP_GENERIC_ACCENT_COLOR` - Override accent color (r,g,b floats)
-//! - `XDP_GENERIC_CONTRAST` - Override contrast setting (0/1)
-//! - `XDP_GENERIC_REDUCED_MOTION` - Override reduced-motion setting (0/1)
+//! - `XDP_KNAVE_CAPTURE_PROTOCOL=ext|wlr` - Force capture protocol
+//! - `XDP_KNAVE_CAPTURE_NO_FALLBACK=1` - Disable capture fallback
+//! - `XDP_KNAVE_CAPTURE_TIMEOUT_MS=5000` - Ext-capture handshake timeout
+//! - `XDP_KNAVE_INPUT_PROTOCOL=eis|wlr` - Force input protocol
+//! - `XDP_KNAVE_INPUT_NO_FALLBACK=1` - Disable input fallback
+//! - `XDP_KNAVE_CLIPBOARD_PROTOCOL=ext|wlr` - Force clipboard protocol
+//! - `XDP_KNAVE_CLIPBOARD_NO_FALLBACK=1` - Disable clipboard fallback
+//! - `XDP_KNAVE_SOURCE_PICKER` - Path to external source picker tool
+//! - `XDP_KNAVE_COLOR_PICKER` - Path to external color picker tool
+//! - `XDP_KNAVE_COLOR_SCHEME` - Override color-scheme setting (0/1/2)
+//! - `XDP_KNAVE_ACCENT_COLOR` - Override accent color (r,g,b floats)
+//! - `XDP_KNAVE_CONTRAST` - Override contrast setting (0/1)
+//! - `XDP_KNAVE_REDUCED_MOTION` - Override reduced-motion setting (0/1)
+//! - Former `XDP_GENERIC_*` names remain accepted when the matching Knave name
+//!   is unset; Knave-prefixed settings take precedence.
 //!
 //! # Usage
 //!
 //! ```ignore
-//! use xdg_desktop_portal_generic::PortalBackend;
+//! use xdg_desktop_portal_knave::PortalBackend;
 //!
 //! let backend = PortalBackend::connect().await?;
 //! backend.run().await?;
@@ -69,6 +71,7 @@
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used))]
 
 pub mod dbus;
+pub(crate) mod env;
 pub mod error;
 pub mod health;
 pub mod pipewire;
@@ -76,6 +79,9 @@ pub mod services;
 pub mod session;
 pub mod types;
 pub mod wayland;
+
+pub(crate) const RESTORE_DATA_VENDOR: &str = "knave";
+pub(crate) const LEGACY_RESTORE_DATA_VENDOR: &str = "generic";
 
 // Re-export main types
 use std::{
@@ -230,6 +236,8 @@ impl PortalBackend {
                   scatter one coherent startup sequence across several arbitrarily-named helpers"
     )]
     pub async fn run(&mut self) -> anyhow::Result<()> {
+        env::warn_on_legacy_settings();
+
         use dbus::{
             ClipboardInterface, ClipboardSignal, InputCaptureInterface, RemoteDesktopInterface,
             ScreenCastInterface, ScreenshotInterface, SettingsInterface,
@@ -243,7 +251,7 @@ impl PortalBackend {
         let pending_writes = clipboard_iface.pending_writes();
 
         let connection = zbus::connection::Builder::session()?
-            .name("org.freedesktop.impl.portal.desktop.generic")?
+            .name("org.freedesktop.impl.portal.desktop.knave")?
             .serve_at(
                 "/org/freedesktop/portal/desktop",
                 RemoteDesktopInterface::new(

@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+This Knave fork begins a separate `0.0.1` release series. Earlier entries
+record the inherited upstream project's release history.
+
+### Changed
+
+- Rename the backend package, executable, portal ID, and D-Bus service to the
+  Knave identity.
+- Prefer `XDP_KNAVE_*` settings while accepting former `XDP_GENERIC_*` names;
+  continue reading restore data written with the former `generic` vendor.
+
 ## [1.0.0] - 2026-09-30
 
 ### Breaking

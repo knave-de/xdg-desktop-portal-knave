@@ -6,7 +6,7 @@
 //!
 //! Run with: `cargo run --example input_config`
 
-use xdg_desktop_portal_generic::services::input::{
+use xdg_desktop_portal_knave::services::input::{
     AvailableProtocols, InputBackendConfig, InputProtocol, ProtocolDetector,
 };
 
@@ -18,9 +18,9 @@ fn main() {
     println!("  Allow fallback: {}", default_config.allow_fallback);
 
     // Configuration from environment variables:
-    //   XDP_GENERIC_INPUT_PROTOCOL=eis|wlr
-    //   XDP_GENERIC_INPUT_NO_FALLBACK=1
-    //   XDP_GENERIC_EIS_SOCKET=/run/user/1000/eis-custom
+    //   XDP_KNAVE_INPUT_PROTOCOL=eis|wlr
+    //   XDP_KNAVE_INPUT_NO_FALLBACK=1
+    //   XDP_KNAVE_EIS_SOCKET=/run/user/1000/eis-custom
     let env_config = InputBackendConfig::from_env();
     println!("\nFrom environment:");
     println!("  Preferred: {}", env_config.preferred);

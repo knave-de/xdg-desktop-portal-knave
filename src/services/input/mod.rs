@@ -14,7 +14,7 @@
 //! # Example
 //!
 //! ```ignore
-//! use xdg_desktop_portal_generic::services::input::{
+//! use xdg_desktop_portal_knave::services::input::{
 //!     create_input_backend, InputBackendConfig,
 //! };
 //!
@@ -333,13 +333,13 @@ impl InputBackendConfig {
     /// Create configuration from environment variables.
     ///
     /// Reads:
-    /// - `XDP_GENERIC_INPUT_PROTOCOL`: "eis" or "wlr"
-    /// - `XDP_GENERIC_INPUT_NO_FALLBACK`: "1" to disable fallback
-    /// - `XDP_GENERIC_EIS_SOCKET`: Custom EIS socket path
+    /// - `XDP_KNAVE_INPUT_PROTOCOL`: "eis" or "wlr"
+    /// - `XDP_KNAVE_INPUT_NO_FALLBACK`: "1" to disable fallback
+    /// - `XDP_KNAVE_EIS_SOCKET`: Custom EIS socket path
     pub fn from_env() -> Self {
         let mut config = Self::default();
 
-        if let Ok(protocol) = std::env::var("XDP_GENERIC_INPUT_PROTOCOL") {
+        if let Ok(protocol) = crate::env::var("INPUT_PROTOCOL") {
             match protocol.to_lowercase().as_str() {
                 "eis" => config.preferred = InputProtocol::Eis,
                 "wlr" => config.preferred = InputProtocol::WlrVirtualInput,
@@ -347,11 +347,11 @@ impl InputBackendConfig {
             }
         }
 
-        if std::env::var("XDP_GENERIC_INPUT_NO_FALLBACK").is_ok() {
+        if crate::env::var("INPUT_NO_FALLBACK").is_ok() {
             config.allow_fallback = false;
         }
 
-        if let Ok(socket) = std::env::var("XDP_GENERIC_EIS_SOCKET") {
+        if let Ok(socket) = crate::env::var("EIS_SOCKET") {
             config.eis.socket_path = Some(PathBuf::from(socket));
         }
 

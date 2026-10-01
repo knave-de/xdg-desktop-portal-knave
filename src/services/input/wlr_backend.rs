@@ -71,7 +71,7 @@ struct XkbData {
     pool_key_names: [String; DYNAMIC_KEYSYM_POOL_SIZE],
     /// LRU pool of keycodes dynamically bound to whatever keysyms the base
     /// "us" layout has no key for (CJK, accented Latin, and other non-ASCII
-    /// characters — see `EI-TEXT-SCOPING-2026-09-07.md` in lamco-admin).
+    /// characters).
     dynamic_pool: DynamicKeysymPool,
 }
 
@@ -1110,8 +1110,7 @@ impl InputBackend for WlrInputBackend {
 
         // Fallback: dynamically bind a pool keycode to this keysym. Covers
         // CJK, accented Latin, and any other character the base layout has
-        // no key for -- see EI-TEXT-SCOPING-2026-09-07.md in lamco-admin
-        // (`~/lamco-admin/projects/xdg-desktop-portal-generic/`).
+        // no key for.
         let xkb_data = self.state.xkb.as_mut()?;
         let (slot, changed) = xkb_data.dynamic_pool.resolve(keysym);
         let evdev_keycode = DYNAMIC_POOL_EVDEV_CODES[slot];

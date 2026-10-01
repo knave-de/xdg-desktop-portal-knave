@@ -8,8 +8,8 @@ testing, and code quality requirements.
 Install dependencies (see README.md), then:
 
 ```sh
-git clone https://github.com/lamco-admin/xdg-desktop-portal-generic
-cd xdg-desktop-portal-generic
+git clone https://github.com/knave-de/xdg-desktop-portal-knave
+cd xdg-desktop-portal-knave
 git config core.hooksPath .githooks
 cargo build
 cargo test
@@ -64,7 +64,7 @@ a system-wide install:
 
 ```sh
 XDG_DESKTOP_PORTAL_DIR=./data/ \
-    RUST_LOG=xdg_desktop_portal_generic=debug \
+    RUST_LOG=xdg_desktop_portal_knave=debug \
     cargo run
 ```
 
@@ -84,7 +84,7 @@ dbus-monitor --session "interface='org.freedesktop.impl.portal.ScreenCast'"
 Introspect the service:
 
 ```sh
-busctl --user introspect org.freedesktop.impl.portal.desktop.generic /
+busctl --user introspect org.freedesktop.impl.portal.desktop.knave /
 ```
 
 ### Manual D-Bus Calls
@@ -93,10 +93,10 @@ You can trigger portal methods directly with `busctl`:
 
 ```sh
 # Check if the service is running
-busctl --user status org.freedesktop.impl.portal.desktop.generic
+busctl --user status org.freedesktop.impl.portal.desktop.knave
 
 # Read a setting
-busctl --user call org.freedesktop.impl.portal.desktop.generic \
+busctl --user call org.freedesktop.impl.portal.desktop.knave \
     /org/freedesktop/portal/desktop \
     org.freedesktop.impl.portal.Settings \
     Read ss "org.freedesktop.appearance" "color-scheme"
@@ -116,9 +116,9 @@ src/
   lib.rs         Library root and PortalBackend orchestration
   main.rs        Binary entry point
 data/
-  generic.portal                                    Portal interface declaration
-  org.freedesktop.impl.portal.desktop.generic.service  D-Bus activation service
-  xdg-desktop-portal-generic.service                Systemd user service unit
+  knave.portal                                    Portal interface declaration
+  org.freedesktop.impl.portal.desktop.knave.service  D-Bus activation service
+  xdg-desktop-portal-knave.service                Systemd user service unit
 ```
 
 ## Commit Messages

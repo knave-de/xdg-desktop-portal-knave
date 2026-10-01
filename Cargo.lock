@@ -1630,8 +1630,8 @@ dependencies = [
 ]
 
 [[package]]
-name = "xdg-desktop-portal-generic"
-version = "1.0.0"
+name = "xdg-desktop-portal-knave"
+version = "0.0.1"
 dependencies = [
  "anyhow",
  "enumflags2",

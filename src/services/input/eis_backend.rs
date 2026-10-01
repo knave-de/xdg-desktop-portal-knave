@@ -689,8 +689,7 @@ fn device_types_to_capabilities(devices: DeviceTypes) -> BitFlags<DeviceCapabili
         caps |= DeviceCapability::Keyboard;
         // ei_text rides on keyboard capability -- there's no separate
         // DeviceTypes/D-Bus toggle for it, and the protocol only makes sense
-        // alongside a keyboard device. See EI-TEXT-SCOPING-2026-09-07.md in
-        // lamco-admin: EisBridgeBackend now resolves EisRequest::TextKeysym
+        // alongside a keyboard device. EisBridgeBackend resolves TextKeysym
         // via a dynamically-extended wlr keymap (WlrInputBackend's
         // DynamicKeysymPool). TextUtf8 has no realization path yet and is
         // logged-and-dropped, but advertising Text is still correct: an

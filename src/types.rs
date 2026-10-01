@@ -130,10 +130,8 @@ pub struct StreamOutputMapping {
     /// by comparing these two strings (see `ei_device.region_mapping_id`
     /// and the ScreenCast `mapping_id` stream property), so a PipeWire
     /// node-ID string here (or any other divergent format) breaks
-    /// multi-monitor correlation for any client that actually uses it —
-    /// hit in the field 2026-09-09, see
-    /// `EIS-ABSOLUTE-POINTER-MULTI-MONITOR-GAP-2026-09-09.md` in
-    /// lamco-admin. `None` only when the capture side didn't provide one.
+    /// multi-monitor correlation for any client that actually uses it.
+    /// `None` only when the capture side didn't provide one.
     pub mapping_id: Option<String>,
     /// This output's integer buffer scale (`wl_output.scale`; 1 for a
     /// non-HiDPI output), carried through to [`PointerRegion::scale`].

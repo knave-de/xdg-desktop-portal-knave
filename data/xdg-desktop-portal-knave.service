@@ -1,0 +1,14 @@
+[Unit]
+Description=Knave XDG Desktop Portal Backend
+PartOf=graphical-session.target
+After=xdg-desktop-portal.service
+
+[Service]
+Type=dbus
+BusName=org.freedesktop.impl.portal.desktop.knave
+ExecStart=/usr/libexec/xdg-desktop-portal-knave
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=graphical-session.target
