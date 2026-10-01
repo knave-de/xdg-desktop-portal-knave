@@ -6,7 +6,7 @@
 //!
 //! Run with: `cargo run --example detect_protocols`
 
-use xdg_desktop_portal_generic::wayland::WaylandConnection;
+use xdg_desktop_portal_knave::wayland::WaylandConnection;
 
 fn main() -> anyhow::Result<()> {
     // Connect to the compositor via $WAYLAND_DISPLAY

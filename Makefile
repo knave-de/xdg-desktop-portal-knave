@@ -11,7 +11,7 @@ DATADIR ?= $(PREFIX)/share
 # aren't available (e.g. cross-compiling without a target pkg-config).
 SYSTEMD_USER_DIR ?= $(shell pkg-config --variable=systemduserunitdir systemd 2>/dev/null || echo $(PREFIX)/lib/systemd/user)
 
-BINARY = xdg-desktop-portal-generic
+BINARY = xdg-desktop-portal-knave
 CARGO ?= cargo
 
 .PHONY: all build install uninstall clean
@@ -23,15 +23,15 @@ build:
 
 install: build
 	install -Dm755 target/release/$(BINARY) $(DESTDIR)$(LIBEXECDIR)/$(BINARY)
-	install -Dm644 data/generic.portal $(DESTDIR)$(DATADIR)/xdg-desktop-portal/portals/generic.portal
-	install -Dm644 data/org.freedesktop.impl.portal.desktop.generic.service $(DESTDIR)$(DATADIR)/dbus-1/services/org.freedesktop.impl.portal.desktop.generic.service
-	install -Dm644 data/xdg-desktop-portal-generic.service $(DESTDIR)$(SYSTEMD_USER_DIR)/xdg-desktop-portal-generic.service
+	install -Dm644 data/knave.portal $(DESTDIR)$(DATADIR)/xdg-desktop-portal/portals/knave.portal
+	install -Dm644 data/org.freedesktop.impl.portal.desktop.knave.service $(DESTDIR)$(DATADIR)/dbus-1/services/org.freedesktop.impl.portal.desktop.knave.service
+	install -Dm644 data/xdg-desktop-portal-knave.service $(DESTDIR)$(SYSTEMD_USER_DIR)/xdg-desktop-portal-knave.service
 
 uninstall:
 	rm -f $(DESTDIR)$(LIBEXECDIR)/$(BINARY)
-	rm -f $(DESTDIR)$(DATADIR)/xdg-desktop-portal/portals/generic.portal
-	rm -f $(DESTDIR)$(DATADIR)/dbus-1/services/org.freedesktop.impl.portal.desktop.generic.service
-	rm -f $(DESTDIR)$(SYSTEMD_USER_DIR)/xdg-desktop-portal-generic.service
+	rm -f $(DESTDIR)$(DATADIR)/xdg-desktop-portal/portals/knave.portal
+	rm -f $(DESTDIR)$(DATADIR)/dbus-1/services/org.freedesktop.impl.portal.desktop.knave.service
+	rm -f $(DESTDIR)$(SYSTEMD_USER_DIR)/xdg-desktop-portal-knave.service
 
 clean:
 	$(CARGO) clean

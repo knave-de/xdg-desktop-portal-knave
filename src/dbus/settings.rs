@@ -10,10 +10,10 @@
 //!
 //! Settings are read from environment variables with sensible defaults:
 //!
-//! - `XDP_GENERIC_COLOR_SCHEME` — `0` (default), `1` (dark), `2` (light)
-//! - `XDP_GENERIC_ACCENT_COLOR` — `r,g,b` as floats (e.g., `0.21,0.52,0.89`)
-//! - `XDP_GENERIC_CONTRAST` — `0` (default), `1` (high)
-//! - `XDP_GENERIC_REDUCED_MOTION` — `0` (normal), `1` (reduced)
+//! - `XDP_KNAVE_COLOR_SCHEME` — `0` (default), `1` (dark), `2` (light)
+//! - `XDP_KNAVE_ACCENT_COLOR` — `r,g,b` as floats (e.g., `0.21,0.52,0.89`)
+//! - `XDP_KNAVE_CONTRAST` — `0` (default), `1` (high)
+//! - `XDP_KNAVE_REDUCED_MOTION` — `0` (normal), `1` (reduced)
 //! - Falls back to detecting dark mode from `GTK_THEME` (if it contains "dark")
 
 use std::collections::HashMap;
@@ -78,12 +78,12 @@ impl SettingsInterface {
     /// Detect color scheme preference.
     ///
     /// Priority:
-    /// 1. `XDP_GENERIC_COLOR_SCHEME` environment variable
+    /// 1. `XDP_KNAVE_COLOR_SCHEME` environment variable
     /// 2. `GTK_THEME` containing "dark" (case-insensitive)
     /// 3. Default (0 = no preference)
     fn detect_color_scheme() -> u32 {
         // Explicit override
-        if let Ok(val) = std::env::var("XDP_GENERIC_COLOR_SCHEME") {
+        if let Ok(val) = crate::env::var("COLOR_SCHEME") {
             if let Ok(n) = val.parse::<u32>() {
                 if n <= 2 {
                     return n;
@@ -103,10 +103,10 @@ impl SettingsInterface {
 
     /// Detect accent color.
     ///
-    /// Reads from `XDP_GENERIC_ACCENT_COLOR` as "r,g,b" floats, defaults
+    /// Reads from `XDP_KNAVE_ACCENT_COLOR` as "r,g,b" floats, defaults
     /// to a neutral blue (GNOME/COSMIC default).
     fn detect_accent_color() -> (f64, f64, f64) {
-        if let Ok(val) = std::env::var("XDP_GENERIC_ACCENT_COLOR") {
+        if let Ok(val) = crate::env::var("ACCENT_COLOR") {
             let parts: Vec<&str> = val.split(',').collect();
             if parts.len() == 3 {
                 if let (Ok(r), Ok(g), Ok(b)) = (
@@ -125,7 +125,7 @@ impl SettingsInterface {
 
     /// Detect contrast preference.
     fn detect_contrast() -> u32 {
-        if let Ok(val) = std::env::var("XDP_GENERIC_CONTRAST") {
+        if let Ok(val) = crate::env::var("CONTRAST") {
             if let Ok(n) = val.parse::<u32>() {
                 if n <= 1 {
                     return n;
@@ -139,7 +139,7 @@ impl SettingsInterface {
     ///
     /// Returns 0 (normal animations) or 1 (prefer reduced motion).
     fn detect_reduced_motion() -> u32 {
-        if let Ok(val) = std::env::var("XDP_GENERIC_REDUCED_MOTION") {
+        if let Ok(val) = crate::env::var("REDUCED_MOTION") {
             if let Ok(n) = val.parse::<u32>() {
                 if n <= 1 {
                     return n;

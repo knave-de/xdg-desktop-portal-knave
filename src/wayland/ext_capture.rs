@@ -172,9 +172,9 @@ pub struct ExtCaptureState {
     pub pipewire: Option<Arc<PipeWireManager>>,
     /// Direct frame channel for in-process consumers (bypasses PipeWire).
     /// Mirrors `ScreencopyState::frame_tx` — when set, frames are routed
-    /// here instead of through PipeWire's buffer pool. Required for the
-    /// embedded portal-generic deployment in lamco-rdp-server (PipeWire's
-    /// buffer pointers can't be shared across separate connections).
+    /// here instead of through PipeWire's buffer pool. Embedded consumers need
+    /// this path because PipeWire buffer pointers cannot be shared across
+    /// separate connections.
     pub frame_tx: Option<std::sync::mpsc::Sender<super::screencopy::RawFrame>>,
     /// Reference to the wl_shm global for buffer allocation.
     pub shm: Option<WlShm>,

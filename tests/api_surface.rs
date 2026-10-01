@@ -8,7 +8,7 @@
     reason = "integration tests run as a separate crate where the library's cfg(test) unwrap allowance does not apply; unwrap is acceptable in test setup"
 )]
 
-use xdg_desktop_portal_generic::{
+use xdg_desktop_portal_knave::{
     error::PortalError,
     services::{
         capture::CaptureProtocol,

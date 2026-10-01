@@ -56,12 +56,12 @@ impl ClipboardPreference {
     /// Create preferences from environment variables.
     ///
     /// Reads:
-    /// - `XDP_GENERIC_CLIPBOARD_PROTOCOL`: "ext" or "wlr"
-    /// - `XDP_GENERIC_CLIPBOARD_NO_FALLBACK`: "1" to disable fallback
+    /// - `XDP_KNAVE_CLIPBOARD_PROTOCOL`: "ext" or "wlr"
+    /// - `XDP_KNAVE_CLIPBOARD_NO_FALLBACK`: "1" to disable fallback
     pub fn from_env() -> Self {
         let mut prefs = Self::default();
 
-        if let Ok(protocol) = std::env::var("XDP_GENERIC_CLIPBOARD_PROTOCOL") {
+        if let Ok(protocol) = crate::env::var("CLIPBOARD_PROTOCOL") {
             match protocol.to_lowercase().as_str() {
                 "ext" | "ext-data-control" => {
                     prefs.preferred = Some(ClipboardProtocol::ExtDataControl);
@@ -73,7 +73,7 @@ impl ClipboardPreference {
             }
         }
 
-        if std::env::var("XDP_GENERIC_CLIPBOARD_NO_FALLBACK").is_ok() {
+        if crate::env::var("CLIPBOARD_NO_FALLBACK").is_ok() {
             prefs.allow_fallback = false;
         }
 

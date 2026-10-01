@@ -585,7 +585,7 @@ impl InputCaptureInterface {
             // the negotiated capabilities bitmask as the opaque data payload,
             // matching ScreenCast's (vendor, version, data) restore_data shape.
             let data_value = Value::from(negotiated.to_bits());
-            let rd_tuple = Value::from(("generic", 1u32, data_value));
+            let rd_tuple = Value::from((crate::RESTORE_DATA_VENDOR, 1u32, data_value));
             if let Ok(rd_owned) = OwnedValue::try_from(rd_tuple) {
                 results.insert("restore_data".to_string(), rd_owned);
             }

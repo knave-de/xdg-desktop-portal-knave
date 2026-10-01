@@ -312,7 +312,7 @@ fn convert_bgrx_to_rgba(
 
 /// Pick a color from the captured frame.
 ///
-/// If `XDP_GENERIC_COLOR_PICKER` is set, it is invoked as an external tool:
+/// If `XDP_KNAVE_COLOR_PICKER` is set, it is invoked as an external tool:
 /// - Receives the screenshot path (temporary PNG) on stdin
 /// - Should output `x y` coordinates (pixel position) to stdout
 /// - The color at those coordinates is extracted
@@ -322,7 +322,7 @@ fn convert_bgrx_to_rgba(
 /// Returns (r, g, b) as f64 values in the range 0.0 to 1.0.
 fn pick_color_from_frame(data: &ScreenshotData) -> (f64, f64, f64) {
     // Check for external color picker tool
-    if let Ok(picker_cmd) = std::env::var("XDP_GENERIC_COLOR_PICKER") {
+    if let Ok(picker_cmd) = crate::env::var("COLOR_PICKER") {
         match run_color_picker(&picker_cmd, data) {
             Ok(color) => return color,
             Err(e) => {

@@ -1,6 +1,6 @@
 # Roadmap
 
-`xdg-desktop-portal-generic` is a standalone, compositor-agnostic XDG Desktop
+`xdg-desktop-portal-knave` is a standalone, compositor-agnostic XDG Desktop
 Portal backend. It implements the RemoteDesktop, ScreenCast, Clipboard,
 Settings, and Screenshot portal interfaces against standard Wayland protocols,
 with automatic per-domain protocol fallback (`ext-` preferred, `wlr-` retained
@@ -27,8 +27,7 @@ embedded / metadata), per-output capture, and **damage-region tracking**
 `RawFrame::damage_regions` on the direct in-process channel) are implemented.
 Publishing the same regions over the PipeWire wire protocol
 (`SPA_META_VideoDamage`, for non-embedded consumers) is a real, separate
-remainder — see `DAMAGE-REGION-TRACKING-2026-09-07.md` in the lamco-admin
-planning notes for this project. Longer term: **per-window capture** via
+remainder. Longer term: **per-window capture** via
 `ext-image-capture-source-v1` foreign-toplevel sources on compositors that
 expose them — this needs a not-yet-ubiquitous protocol with real
 compositor-support uncertainty, bigger and less certain than it might sound.
@@ -43,9 +42,8 @@ publish the true colorimetry — primaries, transfer function, matrix, range —
 the PipeWire stream's SPA video format instead of dropping it. That makes the
 encoding self-describing so consumers can handle HDR downstream. It builds on the
 pixel-format propagation fix (carry the real captured format rather than assuming
-`BGRx`), which is the prerequisite; the `wlr-screencopy` path stays 8-bit. Full
-requirements (with fallback/no-regression bars) are tracked in the lamco-admin
-planning notes for this project (`10-BIT-HDR-CAPTURE-REQUIREMENTS-2026-07-07.md`).
+`BGRx`), which is the prerequisite; the `wlr-screencopy` path stays 8-bit. Any
+HDR support must retain a usable SDR path when the compositor lacks HDR capture.
 
 ## Public API surface
 

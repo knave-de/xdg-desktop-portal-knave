@@ -19,6 +19,10 @@ use crate::{
     types::{CursorMode, SourceInfo, SourceType, StreamInfo},
 };
 
+fn is_supported_restore_vendor(vendor: &str) -> bool {
+    vendor == crate::RESTORE_DATA_VENDOR || vendor == crate::LEGACY_RESTORE_DATA_VENDOR
+}
+
 /// `ScreenCast` portal interface implementation.
 pub struct ScreenCastInterface {
     /// Session manager.
@@ -72,8 +76,9 @@ impl ScreenCastInterface {
     /// Try to parse `restore_data` from D-Bus options.
     ///
     /// The `restore_data` option is a `(suv)` tuple: (vendor, version, data).
-    /// We only accept vendor `"generic"` and version `1`. The data variant
-    /// contains a string array of output names.
+    /// We accept the current `"knave"` vendor and the former `"generic"`
+    /// vendor for compatibility, at version 1. The data variant contains a
+    /// string array of output names.
     fn parse_restore_data(options: &HashMap<String, OwnedValue>) -> Option<RestoreData> {
         let rd = options.get("restore_data")?;
         // Try to decode the (suv) structure
@@ -82,7 +87,7 @@ impl ScreenCastInterface {
             let fields = s.fields();
             if fields.len() >= 3 {
                 let vendor: &str = fields[0].downcast_ref().ok()?;
-                if vendor != "generic" {
+                if !is_supported_restore_vendor(vendor) {
                     tracing::debug!(vendor, "Unknown restore_data vendor, ignoring");
                     return None;
                 }
@@ -106,7 +111,7 @@ impl ScreenCastInterface {
                             .collect();
                         if !names.is_empty() {
                             return Some(RestoreData {
-                                vendor: vendor.to_string(),
+                                vendor: crate::RESTORE_DATA_VENDOR.to_string(),
                                 version,
                                 output_names: names,
                             });
@@ -412,9 +417,9 @@ impl ScreenCastInterface {
         // If persist_mode is set, generate and return restore_data
         if persist_mode != PersistMode::None {
             let output_names: Vec<String> = sources.iter().map(|s| s.name.clone()).collect();
-            // Build restore_data as (suv): ("generic", 1, variant(as))
+            // Build restore_data as (suv): ("knave", 1, variant(as))
             let names_value = Value::from(output_names);
-            let rd_tuple = Value::from(("generic", 1u32, names_value));
+            let rd_tuple = Value::from((crate::RESTORE_DATA_VENDOR, 1u32, names_value));
             if let Ok(rd_owned) = OwnedValue::try_from(rd_tuple) {
                 results.insert("restore_data".to_string(), rd_owned);
             }
@@ -517,7 +522,7 @@ impl ScreenCastInterface {
 ///
 /// # Configuration
 ///
-/// - `XDP_GENERIC_SOURCE_PICKER` — Path to external source picker tool.
+/// - `XDP_KNAVE_SOURCE_PICKER` — Path to external source picker tool.
 ///   The tool receives source names (one per line) on stdin and should write
 ///   the selected source name(s) to stdout (one per line).
 ///
@@ -530,7 +535,7 @@ impl ScreenCastInterface {
 /// When false, only the first selection is used.
 fn select_sources_with_picker(sources: &[SourceInfo], multiple: bool) -> Vec<SourceInfo> {
     // Check for external picker tool
-    if let Ok(picker_cmd) = std::env::var("XDP_GENERIC_SOURCE_PICKER") {
+    if let Ok(picker_cmd) = crate::env::var("SOURCE_PICKER") {
         match run_source_picker(&picker_cmd, sources) {
             Ok(selected) => {
                 if selected.is_empty() {
@@ -710,5 +715,12 @@ mod tests {
         let sources = test_sources();
         let result = run_source_picker("false", &sources);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn restore_data_accepts_current_and_legacy_vendors() {
+        assert!(is_supported_restore_vendor("knave"));
+        assert!(is_supported_restore_vendor("generic"));
+        assert!(!is_supported_restore_vendor("other"));
     }
 }

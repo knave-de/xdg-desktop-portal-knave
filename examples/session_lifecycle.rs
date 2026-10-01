@@ -6,7 +6,7 @@
 //!
 //! Run with: `cargo run --example session_lifecycle`
 
-use xdg_desktop_portal_generic::{
+use xdg_desktop_portal_knave::{
     session::{PersistMode, SessionManager, SessionManagerConfig},
     types::DeviceTypes,
 };

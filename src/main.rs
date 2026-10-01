@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 use anyhow::Result;
 use tracing_subscriber::{EnvFilter, fmt, prelude::*};
-use xdg_desktop_portal_generic::{
+use xdg_desktop_portal_knave::{
     PortalBackend,
     pipewire::PipeWireManager,
     services::{
@@ -23,12 +23,11 @@ async fn main() -> Result<()> {
     tracing_subscriber::registry()
         .with(fmt::layer())
         .with(
-            EnvFilter::from_default_env()
-                .add_directive("xdg_desktop_portal_generic=debug".parse()?),
+            EnvFilter::from_default_env().add_directive("xdg_desktop_portal_knave=debug".parse()?),
         )
         .init();
 
-    tracing::info!("Starting xdg-desktop-portal-generic");
+    tracing::info!("Starting xdg-desktop-portal-knave");
 
     // Connect to compositor as a Wayland client
     let mut wayland = WaylandConnection::connect()?;

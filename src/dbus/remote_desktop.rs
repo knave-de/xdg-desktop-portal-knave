@@ -371,7 +371,7 @@ impl RemoteDesktopInterface {
         if persist_mode != PersistMode::None && !sources.is_empty() {
             let output_names: Vec<String> = sources.iter().map(|s| s.name.clone()).collect();
             let names_value = Value::from(output_names);
-            let rd_tuple = Value::from(("generic", 1u32, names_value));
+            let rd_tuple = Value::from((crate::RESTORE_DATA_VENDOR, 1u32, names_value));
             if let Ok(rd_owned) = OwnedValue::try_from(rd_tuple) {
                 results.insert("restore_data".to_string(), rd_owned);
             }

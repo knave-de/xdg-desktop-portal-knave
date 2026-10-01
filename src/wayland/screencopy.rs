@@ -291,7 +291,7 @@ pub struct ScreencopyState {
     frame_count: u64,
     /// Subset of `frame_count` for which a frame was successfully sent on the
     /// direct frame channel. Compared against `frame_count` this surfaces any
-    /// portal-generic-internal loss; compared against the downstream consumer's
+    /// portal-backend-internal loss; compared against the downstream consumer's
     /// drop counter it confirms or refutes "frames lost before reaching consumer."
     /// Tracks the wlr-screencopy direct-channel path only; PipeWire path has
     /// its own queue metrics, and the screenshot reply path is one-shot.

@@ -272,13 +272,13 @@ mod tests {
         // documented defaults: no forced protocol and fallback enabled. Guard on
         // each var so the test is not flaky when the runner has them set.
         let prefs = CapturePreference::from_env();
-        if std::env::var_os("XDP_GENERIC_CAPTURE_PROTOCOL").is_none() {
+        if !crate::env::is_set("CAPTURE_PROTOCOL") {
             assert!(
                 prefs.preferred.is_none(),
                 "default preferred protocol should be None"
             );
         }
-        if std::env::var_os("XDP_GENERIC_CAPTURE_NO_FALLBACK").is_none() {
+        if !crate::env::is_set("CAPTURE_NO_FALLBACK") {
             assert!(
                 prefs.allow_fallback,
                 "fallback should be enabled by default"
