@@ -427,6 +427,35 @@ pub fn create_input_backend(
     }
 }
 
+/// Input placeholder for capture-only sessions. No injection capability is exposed.
+pub struct UnavailableInput;
+impl InputBackend for UnavailableInput {
+    fn protocol_type(&self) -> InputProtocol {
+        InputProtocol::WlrVirtualInput
+    }
+    fn create_context(&mut self, _: &str, _: DeviceTypes) -> Result<Option<OwnedFd>> {
+        Err(PortalError::Config("input injection is unavailable".into()))
+    }
+    fn destroy_context(&mut self, _: &str) -> Result<()> {
+        Ok(())
+    }
+    fn inject_event(&mut self, _: &str, _: InputEvent) -> Result<()> {
+        Err(PortalError::Config("input injection is unavailable".into()))
+    }
+    fn process_events(&mut self) -> Result<Vec<(String, InputEvent)>> {
+        Ok(Vec::new())
+    }
+    fn has_context(&self, _: &str) -> bool {
+        false
+    }
+    fn context_count(&self) -> usize {
+        0
+    }
+    fn keysym_to_keycode(&mut self, _: u32) -> Option<u32> {
+        None
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

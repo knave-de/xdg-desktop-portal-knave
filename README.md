@@ -9,10 +9,11 @@
 It provides the XDG Desktop Portal backend services needed by sandboxed and
 other desktop applications in a Wayland session.
 
-The fork retains the upstream backend's compositor-independent implementation
-and is the home for Knave-specific portal integration. The Knave naming and
-activation identity are in place; live integration with a Knave session still
-needs end-to-end validation.
+Knave integrates monitor screenshots and sharing with Villain's standard
+`ext-image-copy-capture-v1` protocol and Knave Shell's own Rust/wgpu UI toolkit.
+The backend pins Knave configuration and the private picker contract to a merged
+Git revision. Install a matching Knave Shell binary for native consent. Consent starts with no selected source; previews,
+explicit confirmation, cancellation, and a Stop sharing control belong to Shell.
 
 The backend connects to the compositor as a standalone Wayland client and uses
 standard Wayland protocols. This keeps portal implementation separate from
@@ -27,12 +28,14 @@ version.
 
 | Portal Interface | Version | Primary Protocol | Fallback |
 |------------------|---------|------------------|----------|
-| `RemoteDesktop` | v2 | EIS (libei) bridge mode | wlr-virtual-pointer + zwp-virtual-keyboard |
-| `ScreenCast` | v6 | ext-image-copy-capture-v1 | wlr-screencopy-v1 |
-| `Clipboard` | v1 | ext-data-control-v1 | wlr-data-control-v1 |
-| `Settings` | v2 | Environment variable config | GTK_THEME detection |
-| `Screenshot` | v2 | Single-frame capture to PNG | -- |
-| `InputCapture` | v2 | Barrier surfaces (wlr-layer-shell-v1) + pointer lock (zwp-pointer-constraints-v1) + EIS bridge (receiver context) | -- |
+| `ScreenCast` | v6 | ext-image-copy-capture-v1 (monitor only) | wlr-screencopy-v1 |
+| `Settings` | v2 | Canonical Knave configuration | Environment / GTK_THEME |
+| `Screenshot` | v2 | Interactive monitor capture to PNG | -- |
+
+The shipped descriptor advertises these three interfaces. RemoteDesktop,
+InputCapture, Clipboard, window sharing, cursor metadata and native color picking
+are not part of the supported Knave integration. PickColor returns NotSupported.
+Without capture protocols the backend serves Settings independently of PipeWire.
 
 Protocols are auto-detected at startup. The best available protocol is selected
 automatically with ext- protocols preferred over wlr- equivalents.
@@ -89,56 +92,46 @@ make build
 
 ## Installation
 
-```sh
-sudo make install
-```
-
-This installs:
-
-| File | Location |
-|------|----------|
-| Binary | `/usr/libexec/xdg-desktop-portal-knave` |
-| Portal config | `/usr/share/xdg-desktop-portal/portals/knave.portal` |
-| D-Bus service | `/usr/share/dbus-1/services/org.freedesktop.impl.portal.desktop.knave.service` |
-| Systemd unit | `/usr/lib/systemd/user/xdg-desktop-portal-knave.service` |
-
-To uninstall:
+Install matching Villain, Knave, and Knave Shell binaries first using their
+`scripts/install.sh --user` commands. Then run:
 
 ```sh
-sudo make uninstall
+./scripts/install.py --user
 ```
+
+| File | User-local location |
+|------|---------------------|
+| Binary | `~/.local/libexec/xdg-desktop-portal-knave` |
+| Descriptor | `~/.local/share/xdg-desktop-portal/portals/knave.portal` |
+| Routing defaults | `~/.local/share/xdg-desktop-portal/knave-portals.conf` |
+| D-Bus activation | `~/.local/share/dbus-1/services/org.freedesktop.impl.portal.desktop.knave.service` |
+| User unit | `$XDG_CONFIG_HOME/systemd/user/xdg-desktop-portal-knave.service` (normally `~/.config`) |
+
+The installer generates absolute executable paths, reloads user units and D-Bus
+service discovery without restarting the bus or desktop services, and does
+not enable a global startup service. Existing user routing overrides are preserved.
+Use `--prefix PATH --destdir STAGE` for packaging; generated paths refer to PATH,
+not STAGE. Uninstall with `./scripts/install.py --user --uninstall`.
 
 ## Running
 
-### Environment Setup
+A direct Knave session exports `XDG_CURRENT_DESKTOP=Knave:Villain`, its Wayland
+socket, and the resolved Shell binary to D-Bus/systemd activation. Its local share
+directory precedes system data directories. Nested Winit sessions leave host
+activation untouched. Start a new direct Knave session after installing; do not
+restart the host desktop's portals to test a nested compositor.
 
-Ensure your compositor exports the required environment variables into D-Bus:
-
-```sh
-dbus-update-activation-environment --systemd WAYLAND_DISPLAY XDG_CURRENT_DESKTOP
-```
-
-Most compositors do this automatically.
-
-### Portal Configuration
-
-Create a portal configuration file to tell `xdg-desktop-portal` which backend
-to use. Create `~/.config/xdg-desktop-portal/portals.conf` (or the appropriate
-file for your `XDG_CURRENT_DESKTOP`):
+Knave defaults route Settings, ScreenCast and Screenshot here, with `gtk` for
+remaining dialogs (requires `xdg-desktop-portal-gtk`). An optional user override is
+`~/.config/xdg-desktop-portal/knave-portals.conf`:
 
 ```ini
 [preferred]
 default=gtk
-org.freedesktop.impl.portal.RemoteDesktop=knave
 org.freedesktop.impl.portal.ScreenCast=knave
-org.freedesktop.impl.portal.Clipboard=knave
 org.freedesktop.impl.portal.Settings=knave
 org.freedesktop.impl.portal.Screenshot=knave
-org.freedesktop.impl.portal.InputCapture=knave
 ```
-
-See the [portal configuration docs](https://flatpak.github.io/xdg-desktop-portal/docs/portals.conf.html)
-for more information on the `portals.conf` format.
 
 ### Automatic Activation
 
@@ -161,8 +154,21 @@ RUST_LOG=xdg_desktop_portal_knave=debug xdg-desktop-portal-knave
 
 ## Configuration
 
-All configuration is via environment variables, set before the service starts
-(e.g., in your compositor config or systemd override).
+Canonical preferences live in `~/.config/knave/config.toml` (honoring
+`XDG_CONFIG_HOME`). Existing files without `[portal]` receive defaults:
+
+```toml
+[portal]
+enabled = true
+color_scheme = 0
+accent_color = "0.21,0.52,0.89"
+high_contrast = false
+reduced_motion = false
+```
+
+Appearance changes emit SettingChanged through a directory inotify subscription;
+invalid edits retain the last valid settings. `enabled` applies on session startup.
+Explicit environment overrides are still supported:
 
 Settings use the `XDP_KNAVE_*` prefix. For migration, the former
 `XDP_GENERIC_*` names are accepted when the matching Knave-prefixed setting is
@@ -177,7 +183,7 @@ unset; Knave-prefixed values take precedence.
 | `XDP_KNAVE_CONTRAST` | `0` / `1` | `0` | High contrast mode: 0 = normal, 1 = high |
 | `XDP_KNAVE_REDUCED_MOTION` | `0` / `1` | `0` | Reduced motion: 0 = normal, 1 = reduced |
 
-### Input Protocol
+### Inherited input options (not advertised by Knave)
 
 | Variable | Values | Default | Description |
 |----------|--------|---------|-------------|
@@ -190,26 +196,33 @@ unset; Knave-prefixed values take precedence.
 | Variable | Value | Description |
 |----------|-------|-------------|
 | `XDP_KNAVE_SOURCE_PICKER` | path to executable | External tool for ScreenCast source selection UI |
-| `XDP_KNAVE_COLOR_PICKER` | path to executable | External tool for Screenshot color picking |
+| `XDP_KNAVE_SHELL_BINARY` | absolute executable path | Native picker and sharing control binary |
 
-#### Source Picker Protocol
+#### Picker protocol
 
-The source picker tool receives available sources on stdin as tab-separated
-lines (`name\ttype\tid`), one per line. It should output selected source names
-on stdout, one per line. Exit without output to cancel.
+The native command is `knave-shell portal-picker`. It reads one versioned JSON
+request on stdin and returns one versioned JSON reply on stdout. The
+`knave-portal-api` crate defines and validates this private contract. Requests are
+limited to eight sources and 2 MiB, replies to 4 KiB, with one consent dialog at a
+time and a 120-second consent deadline. Sharing controls live until session close.
 
-Example using `fzf`:
+`XDP_KNAVE_SOURCE_PICKER` (or deprecated `XDP_GENERIC_SOURCE_PICKER`) retains the
+legacy tab-separated monitor input and output-name reply for development. Empty
+output cancels; failed tools and unknown names never approve a source. This override
+does not replace the native active-sharing control.
 
-```sh
-#!/bin/sh
-fzf --multi --with-nth=1 --delimiter='\t' | cut -f1
-```
+## Verification
 
-#### Color Picker Protocol
-
-The color picker tool receives a PNG screenshot path on stdin. It should output
-`x y` coordinates (space-separated integers) on stdout. The color at those
-coordinates will be returned to the requesting application.
+`cargo test --all-features`, strict Clippy, and docs build validate the backend.
+`examples/knave_smoke.rs` is an isolated-session integration client: `capture`
+checks raw ext capture; `frontend` checks an interactive screenshot and ten real
+video buffers through the frontend's restricted PipeWire fd, then closes the session.
+Never run an automatic-selection fixture on the normal user session. Build debug binaries/examples in the matching siblings, then run
+`python3 scripts/smoke.py` for settings updates, request cancellation, repeated
+frontend sessions and resource snapshots. `--render` captures the native dialog;
+`--native` requires manual source selection. `--release` uses release builds.
+Native clicks, direct-TTY login, OBS/browser and sandbox apps need separate checks.
+See [the validation record](docs/knave-validation.md) for measured results and limits.
 
 ## Compositor Compatibility
 
@@ -218,15 +231,14 @@ their own portal backend and expose the required standard protocols. Its
 protocols are detected at runtime; the capabilities available depend on the
 compositor and installed PipeWire/portal services.
 
-Knave's Villain compositor is a target for this fork. Actual feature support
-must be checked against Villain's advertised protocols and validated in a live
-Knave session; compilation or protocol declarations alone do not establish
-end-to-end portal behavior. The `UseIn` list in `knave.portal` is retained
-for legacy portal frontend compatibility.
+Nested Villain raw capture, frontend screenshot and PipeWire delivery are exercised
+by the isolated smoke script. Direct-TTY, multiple physical monitors and sandbox
+application behavior remain separate live checks. `UseIn` retains legacy frontend
+compatibility; current frontends select the shipped Knave routing defaults.
 
 ## Architecture
 
-Three-thread model:
+Three execution roles (Tokio uses two async worker threads):
 
 ```
 +--------------------+     mpsc channels     +----------------------+

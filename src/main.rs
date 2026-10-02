@@ -17,7 +17,7 @@ use xdg_desktop_portal_knave::{
     wayland::WaylandConnection,
 };
 
-#[tokio::main]
+#[tokio::main(worker_threads = 2)]
 async fn main() -> Result<()> {
     // Initialize logging
     tracing_subscriber::registry()
@@ -28,12 +28,21 @@ async fn main() -> Result<()> {
         .init();
 
     tracing::info!("Starting xdg-desktop-portal-knave");
+    if std::env::var("XDP_KNAVE_ENABLED").as_deref() == Ok("0") {
+        anyhow::bail!("Knave portal backend is disabled for this session");
+    }
 
     // Connect to compositor as a Wayland client
     let mut wayland = WaylandConnection::connect()?;
+    let disconnected = wayland.disconnected();
     let protocols = wayland.available_protocols().clone();
     let sources = wayland.state().get_sources();
     tracing::info!("Discovered {} output sources", sources.len());
+
+    if !protocols.ext_image_copy_capture && !protocols.wlr_screencopy {
+        tracing::info!("Capture unavailable; serving Settings independently");
+        return xdg_desktop_portal_knave::run_settings_service().await;
+    }
 
     // Start PipeWire manager on a dedicated thread.
     // PipeWire starts BEFORE the Wayland event loop because the event loop
@@ -67,12 +76,16 @@ async fn main() -> Result<()> {
     // This continuously dispatches Wayland events (screencopy frames,
     // output hotplug, data control) and updates the shared state.
     // The PipeWire manager is given to the event loop for frame delivery.
-    let (wayland_stop, shared_wayland_state, capture_tx, _wayland_thread) =
+    let (wayland_stop, shared_wayland_state, capture_tx, wayland_thread) =
         wayland.spawn_event_loop(Arc::clone(&pipewire_manager));
 
     // Create backends based on detected protocols
     let input_config = InputBackendConfig::from_env();
-    let mut input_backend = create_input_backend(&input_config, &protocols)?;
+    let mut input_backend =
+        create_input_backend(&input_config, &protocols).unwrap_or_else(|error| {
+            tracing::info!(%error, "Remote control unavailable; serving capture only");
+            Box::new(xdg_desktop_portal_knave::services::input::UnavailableInput)
+        });
     input_backend.set_shared_wayland_state(shared_wayland_state.clone());
 
     // Clone capture_tx before passing to backend — Screenshot needs its own sender
@@ -103,11 +116,30 @@ async fn main() -> Result<()> {
     backend.set_input_capture_activation_receiver(input_capture_activation_rx);
 
     tracing::info!("Registering D-Bus interfaces...");
-    backend.run().await?;
+    let pipewire_stopped = pipewire_manager.stopped();
+    let result = tokio::select! {
+        result = backend.run() => result,
+        () = disconnected.notified() => { tracing::info!("compositor disconnected; stopping portal"); Ok(()) },
+        () = pipewire_stopped.notified() => Err(anyhow::anyhow!("PipeWire worker stopped")),
+        _ = tokio::signal::ctrl_c() => Ok(()),
+        () = async {
+            if let Ok(mut signal) = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) {
+                signal.recv().await;
+            } else { std::future::pending::<()>().await; }
+        } => Ok(()),
+    };
 
+    let manager = backend.session_manager();
+    let mut manager = manager.lock().await;
+    let handles: Vec<_> = manager.sessions().map(|s| s.id.clone()).collect();
+    for handle in handles {
+        manager.close_session(&handle);
+    }
+    drop(manager);
     // Clean shutdown
     wayland_stop.store(true, std::sync::atomic::Ordering::Relaxed);
     pipewire_manager.shutdown();
+    let _ = wayland_thread.join();
 
-    Ok(())
+    result
 }

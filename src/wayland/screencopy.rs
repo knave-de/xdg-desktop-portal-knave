@@ -60,8 +60,8 @@ pub struct BufferFormatInfo {
 pub struct ShmFrameBuffer {
     /// The Wayland buffer object.
     pub buffer: WlBuffer,
-    /// The SHM pool (kept alive to prevent the buffer from being invalidated).
-    _pool: WlShmPool,
+    /// Owned SHM pool, destroyed along with its buffer.
+    pool: WlShmPool,
     /// The mmap'd pointer for reading pixel data.
     mmap_ptr: *mut libc::c_void,
     /// Size of the mmap'd region in bytes.
@@ -134,7 +134,7 @@ impl ShmFrameBuffer {
 
         Ok(Self {
             buffer,
-            _pool: pool,
+            pool,
             mmap_ptr,
             mmap_size: size,
             format: *format,
@@ -192,6 +192,7 @@ impl Drop for ShmFrameBuffer {
             }
         }
         self.buffer.destroy();
+        self.pool.destroy();
     }
 }
 

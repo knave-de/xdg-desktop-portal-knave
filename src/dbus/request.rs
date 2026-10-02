@@ -28,13 +28,24 @@ pub struct RequestInterface {
     session_manager: Arc<Mutex<SessionManager>>,
     /// Handle of the session this request is for (if any).
     session_handle: Option<String>,
+    cancel: Option<tokio::sync::watch::Sender<bool>>,
 }
 
 impl RequestInterface {
+    pub(crate) fn cancellable() -> (Self, tokio::sync::watch::Receiver<bool>) {
+        let (tx, rx) = tokio::sync::watch::channel(false);
+        let mut request = Self::standalone();
+        request.cancel = Some(tx);
+        (request, rx)
+    }
+    pub(crate) fn cancellation_sender(&self) -> Option<tokio::sync::watch::Sender<bool>> {
+        self.cancel.clone()
+    }
     /// Create a new request interface.
     pub fn new(session_manager: Arc<Mutex<SessionManager>>) -> Self {
         Self {
             session_manager,
+            cancel: None,
             session_handle: None,
         }
     }
@@ -46,6 +57,7 @@ impl RequestInterface {
     pub fn standalone() -> Self {
         Self {
             session_manager: Arc::new(Mutex::new(SessionManager::new())),
+            cancel: None,
             session_handle: None,
         }
     }
@@ -57,6 +69,7 @@ impl RequestInterface {
     ) -> Self {
         Self {
             session_manager,
+            cancel: None,
             session_handle: Some(session_handle),
         }
     }
@@ -72,6 +85,9 @@ impl RequestInterface {
     /// This cancels any in-progress operation and cleans up resources.
     async fn close(&self) {
         tracing::debug!("Request.Close called");
+        if let Some(cancel) = &self.cancel {
+            let _ = cancel.send(true);
+        }
 
         // If this request is associated with a session, close it
         if let Some(session_handle) = &self.session_handle {

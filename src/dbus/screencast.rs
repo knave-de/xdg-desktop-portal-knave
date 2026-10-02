@@ -7,7 +7,7 @@ use std::{collections::HashMap, sync::Arc};
 use tokio::sync::Mutex;
 use zbus::{
     interface,
-    zvariant::{self, ObjectPath, OwnedValue, Value},
+    zvariant::{ObjectPath, OwnedValue, Value},
 };
 
 use super::{Response, empty_results, get_option_bool, get_option_u32};
@@ -16,7 +16,7 @@ use crate::{
     pipewire::PipeWireManager,
     services::{capture::CaptureBackend, input::InputBackend},
     session::{PersistMode, RestoreData, SessionManager},
-    types::{CursorMode, SourceInfo, SourceType, StreamInfo},
+    types::{CursorMode, SourceType, StreamInfo},
 };
 
 fn is_supported_restore_vendor(vendor: &str) -> bool {
@@ -29,10 +29,11 @@ pub struct ScreenCastInterface {
     session_manager: Arc<Mutex<SessionManager>>,
     /// Capture backend for screen capture operations.
     capture_backend: Arc<Mutex<Box<dyn CaptureBackend>>>,
-    /// `PipeWire` manager for stream lifecycle (used by `OpenPipeWireRemote`).
+    /// `PipeWire` manager for stream lifecycle and active-sharing controls.
     pipewire_manager: Arc<PipeWireManager>,
     /// Input backend for session cleanup.
     input_backend: Arc<Mutex<Box<dyn InputBackend>>>,
+    capture_tx: Option<std::sync::mpsc::Sender<crate::wayland::CaptureCommand>>,
 }
 
 impl ScreenCastInterface {
@@ -48,7 +49,18 @@ impl ScreenCastInterface {
             capture_backend,
             pipewire_manager,
             input_backend,
+            capture_tx: None,
         }
+    }
+
+    /// Wire native selection to the shared Wayland capture worker.
+    #[must_use]
+    pub fn with_capture_sender(
+        mut self,
+        sender: std::sync::mpsc::Sender<crate::wayland::CaptureCommand>,
+    ) -> Self {
+        self.capture_tx = Some(sender);
+        self
     }
 
     /// Extract `persist_mode` from options.
@@ -278,71 +290,75 @@ impl ScreenCastInterface {
             "SelectSources called"
         );
 
-        // Register Request object at handle path for cancellation support
-        let request_iface = super::RequestInterface::for_session(
-            Arc::clone(&self.session_manager),
-            session_handle.to_string(),
-        );
-        let _ = server.at(&handle, request_iface).await;
-
-        let source_types = Self::get_source_types(&options);
-        let multiple = Self::get_multiple(&options);
-        let restore_data = Self::parse_restore_data(&options);
-        let persist_mode = Self::get_persist_mode(&options);
-
-        let mut manager = self.session_manager.lock().await;
-        manager.validate_session(&session_handle, app_id, &sender)?;
-
-        // Get available sources from capture backend
-        let backend = self.capture_backend.lock().await;
-        let sources = backend
-            .get_sources(&source_types)
-            .map_err(|e| zbus::fdo::Error::Failed(e.to_string()))?;
-
-        if sources.is_empty() {
-            tracing::warn!("No sources available for capture");
-            return Ok((Response::Other.to_u32(), empty_results()));
-        }
-
-        drop(backend);
-
-        // Try to restore previous selection from restore_data
-        let selected_sources = if let Some(ref rd) = restore_data {
-            let restored: Vec<SourceInfo> = rd
-                .output_names
-                .iter()
-                .filter_map(|name| sources.iter().find(|s| s.name == *name).cloned())
-                .collect();
-
-            if restored.is_empty() {
-                tracing::debug!(
-                    "Restore data output names don't match current outputs, using picker"
-                );
-                select_sources_with_picker(&sources, multiple)
-            } else {
-                tracing::info!(
-                    count = restored.len(),
-                    names = ?rd.output_names,
-                    "Restored sources from persist data"
-                );
-                restored
+        let (request, cancelled) = super::RequestInterface::cancellable();
+        let cancellation = request.cancellation_sender();
+        server.at(&handle, request).await?;
+        let result = async {
+            let source_types = Self::get_source_types(&options);
+            let multiple = Self::get_multiple(&options);
+            let restore_data = Self::parse_restore_data(&options);
+            let persist_mode = Self::get_persist_mode(&options);
+            let cursor_mode = Self::get_cursor_mode(&options);
+            let requested_mode =
+                get_option_u32(&options, "cursor_mode").unwrap_or(cursor_mode.to_bits());
+            let supported = self.capture_backend.lock().await.available_cursor_modes();
+            if !matches!(requested_mode, 1 | 2) || requested_mode & supported == 0 {
+                return Err(zbus::fdo::Error::InvalidArgs(
+                    "Unsupported cursor mode".into(),
+                ));
             }
-        } else {
-            select_sources_with_picker(&sources, multiple)
-        };
-
-        let session = manager
-            .get_session_mut(&session_handle)
-            .ok_or_else(|| PortalError::SessionNotFound(session_handle.to_string()))?;
-
-        session.persist_mode = persist_mode;
-        session.restore_data = restore_data;
-        session.select_sources(selected_sources)?;
-
-        // Remove Request object after method completes
+            {
+                let mut manager = self.session_manager.lock().await;
+                manager.validate_session(&session_handle, app_id, &sender)?;
+                let session = manager
+                    .get_session_mut(&session_handle)
+                    .ok_or_else(|| PortalError::SessionNotFound(session_handle.to_string()))?;
+                session.sharing_stop = cancellation;
+                session.cursor_mode = cursor_mode;
+            }
+            let sources = self
+                .capture_backend
+                .lock()
+                .await
+                .get_sources(&source_types)
+                .map_err(|e| zbus::fdo::Error::Failed(e.to_string()))?;
+            if sources.is_empty() {
+                return Ok((Response::Other.to_u32(), empty_results()));
+            }
+            let tx = self.capture_tx.as_ref().ok_or_else(|| {
+                zbus::fdo::Error::Failed("native capture selection is not wired".into())
+            })?;
+            let selected = crate::picker::select(
+                app_id,
+                handle.as_str(),
+                knave_portal_api::Operation::Share,
+                multiple,
+                &sources,
+                tx,
+                cancelled,
+            )
+            .await;
+            let selected = match selected {
+                Ok(selected) if !selected.is_empty() => selected,
+                Ok(_) => return Ok((Response::Cancelled.to_u32(), empty_results())),
+                Err(error) => {
+                    tracing::warn!(%error, "source selection failed");
+                    return Ok((Response::Other.to_u32(), empty_results()));
+                }
+            };
+            let mut manager = self.session_manager.lock().await;
+            manager.validate_session(&session_handle, app_id, &sender)?;
+            let session = manager
+                .get_session_mut(&session_handle)
+                .ok_or_else(|| PortalError::SessionNotFound(session_handle.to_string()))?;
+            session.persist_mode = persist_mode;
+            session.restore_data = restore_data;
+            session.select_sources(selected)?;
+            Ok((Response::Success.to_u32(), empty_results()))
+        }
+        .await;
         let _ = server.remove::<super::RequestInterface, _>(&handle).await;
-
-        Ok((Response::Success.to_u32(), empty_results()))
+        result
     }
 
     /// Start the `ScreenCast` session.
@@ -360,8 +376,9 @@ impl ScreenCastInterface {
         options: HashMap<String, OwnedValue>,
         #[zbus(header)] header: zbus::message::Header<'_>,
         #[zbus(object_server)] server: &zbus::ObjectServer,
+        #[zbus(connection)] connection: &zbus::Connection,
     ) -> zbus::fdo::Result<(u32, HashMap<String, OwnedValue>)> {
-        let _ = parent_window;
+        let _ = (parent_window, options);
         let sender = header
             .sender()
             .ok_or_else(|| zbus::fdo::Error::Failed("Missing sender".to_string()))?
@@ -381,114 +398,86 @@ impl ScreenCastInterface {
         );
         let _ = server.at(&handle, request_iface).await;
 
-        let cursor_mode = Self::get_cursor_mode(&options);
+        let result = async {
+            let mut manager = self.session_manager.lock().await;
+            manager.validate_session(&session_handle, app_id, &sender)?;
 
-        let mut manager = self.session_manager.lock().await;
-        manager.validate_session(&session_handle, app_id, &sender)?;
+            let session = manager
+                .get_session_mut(&session_handle)
+                .ok_or_else(|| PortalError::SessionNotFound(session_handle.to_string()))?;
 
-        let session = manager
-            .get_session_mut(&session_handle)
-            .ok_or_else(|| PortalError::SessionNotFound(session_handle.to_string()))?;
-
-        if !session.sources_selected {
-            return Err(PortalError::InvalidState {
-                expected: "Sources selected".to_string(),
-                actual: "No sources selected".to_string(),
+            if !session.sources_selected {
+                return Err(PortalError::InvalidState {
+                    expected: "Sources selected".to_string(),
+                    actual: "No sources selected".to_string(),
+                }
+                .into());
             }
-            .into());
-        }
 
-        let sources = session.sources.clone();
-        let persist_mode = session.persist_mode;
+            let cursor_mode = session.cursor_mode;
+            let sources = session.sources.clone();
+            let persist_mode = session.persist_mode;
 
-        // Create capture streams via capture backend
-        let mut backend = self.capture_backend.lock().await;
-        let streams = backend
-            .create_capture_session(&sources, cursor_mode)
-            .map_err(|e| zbus::fdo::Error::Failed(e.to_string()))?;
+            // Create capture streams via capture backend
+            let mut backend = self.capture_backend.lock().await;
+            let streams = backend
+                .create_capture_session(&sources, cursor_mode)
+                .map_err(|e| zbus::fdo::Error::Failed(e.to_string()))?;
 
-        drop(backend);
+            drop(backend);
 
-        // Start the session with streams
-        session.start(streams.clone())?;
-
-        let mut results = Self::build_stream_results(&streams);
-
-        // If persist_mode is set, generate and return restore_data
-        if persist_mode != PersistMode::None {
-            let output_names: Vec<String> = sources.iter().map(|s| s.name.clone()).collect();
-            // Build restore_data as (suv): ("knave", 1, variant(as))
-            let names_value = Value::from(output_names);
-            let rd_tuple = Value::from((crate::RESTORE_DATA_VENDOR, 1u32, names_value));
-            if let Ok(rd_owned) = OwnedValue::try_from(rd_tuple) {
-                results.insert("restore_data".to_string(), rd_owned);
-            }
-            results.insert(
-                "persist_mode".to_string(),
-                OwnedValue::from(persist_mode.to_dbus()),
+            // Start the session with streams
+            session.start(streams.clone())?;
+            let (stop, cancelled) = tokio::sync::watch::channel(false);
+            session.sharing_stop = Some(stop);
+            crate::picker::sharing(
+                crate::picker::request(
+                    app_id,
+                    session_handle.as_str(),
+                    knave_portal_api::Operation::Sharing,
+                    false,
+                    &sources,
+                ),
+                Arc::clone(&self.session_manager),
+                Arc::clone(&self.capture_backend),
+                Arc::clone(&self.pipewire_manager),
+                connection.clone(),
+                cancelled,
             );
-        }
 
-        tracing::info!(
-            session_id = %session_handle,
-            stream_count = streams.len(),
-            persist = ?persist_mode,
-            "ScreenCast session started"
-        );
+            let mut results = Self::build_stream_results(&streams);
 
-        // Remove Request object after method completes
-        let _ = server.remove::<super::RequestInterface, _>(&handle).await;
-
-        Ok((Response::Success.to_u32(), results))
-    }
-
-    /// Open a `PipeWire` remote for the `ScreenCast` session.
-    ///
-    /// Returns a file descriptor that the client can use to connect to `PipeWire`
-    /// and access the screen capture stream nodes. This is required by the
-    /// xdg-desktop-portal spec for `ScreenCast` version 4+.
-    #[zbus(name = "OpenPipeWireRemote")]
-    async fn open_pipe_wire_remote(
-        &self,
-        session_handle: ObjectPath<'_>,
-        options: HashMap<String, OwnedValue>,
-    ) -> zbus::fdo::Result<zvariant::OwnedFd> {
-        let _ = &options;
-        tracing::debug!(
-            session_handle = %session_handle,
-            "OpenPipeWireRemote called"
-        );
-
-        // Validate the session exists and has been started
-        let manager = self.session_manager.lock().await;
-        let session = manager
-            .get_session(&session_handle)
-            .ok_or_else(|| PortalError::SessionNotFound(session_handle.to_string()))?;
-
-        if !session.is_started() {
-            return Err(PortalError::InvalidState {
-                expected: "Session started with streams".to_string(),
-                actual: "Session not started".to_string(),
+            // If persist_mode is set, generate and return restore_data
+            if persist_mode != PersistMode::None {
+                let output_names: Vec<String> = sources.iter().map(|s| s.name.clone()).collect();
+                // Build restore_data as (suv): ("knave", 1, variant(as))
+                let names_value = Value::from(output_names);
+                let rd_tuple = Value::from((crate::RESTORE_DATA_VENDOR, 1u32, names_value));
+                if let Ok(rd_owned) = OwnedValue::try_from(rd_tuple) {
+                    results.insert("restore_data".to_string(), rd_owned);
+                }
+                results.insert(
+                    "persist_mode".to_string(),
+                    OwnedValue::from(persist_mode.to_dbus()),
+                );
             }
-            .into());
+
+            tracing::info!(
+                session_id = %session_handle,
+                stream_count = streams.len(),
+                persist = ?persist_mode,
+                "ScreenCast session started"
+            );
+
+            Ok((Response::Success.to_u32(), results))
         }
-
-        drop(manager);
-
-        // Get a PipeWire remote fd from the manager
-        let fd = self
-            .pipewire_manager
-            .open_remote()
-            .await
-            .map_err(|e| zbus::fdo::Error::Failed(e.to_string()))?;
-
-        tracing::info!(
-            session_handle = %session_handle,
-            "PipeWire remote fd opened for client"
-        );
-
-        Ok(zvariant::OwnedFd::from(fd))
+        .await;
+        let _ = server.remove::<super::RequestInterface, _>(&handle).await;
+        result
     }
+
+    // OpenPipeWireRemote belongs to the frontend, which grants restricted node
+    // permissions. It is deliberately not a backend interface method.
 
     // === Properties ===
 
@@ -518,207 +507,11 @@ impl ScreenCastInterface {
     }
 }
 
-/// Select sources using an external picker tool, or auto-select on fallback.
-///
-/// # Configuration
-///
-/// - `XDP_KNAVE_SOURCE_PICKER` — Path to external source picker tool.
-///   The tool receives source names (one per line) on stdin and should write
-///   the selected source name(s) to stdout (one per line).
-///
-/// - If the tool exits with non-zero status, the selection is cancelled.
-/// - If no picker is configured, auto-selects the first source.
-///
-/// # Multi-select
-///
-/// When `multiple` is true, the picker may return multiple selections.
-/// When false, only the first selection is used.
-fn select_sources_with_picker(sources: &[SourceInfo], multiple: bool) -> Vec<SourceInfo> {
-    // Check for external picker tool
-    if let Ok(picker_cmd) = crate::env::var("SOURCE_PICKER") {
-        match run_source_picker(&picker_cmd, sources) {
-            Ok(selected) => {
-                if selected.is_empty() {
-                    tracing::info!("Source picker returned no selections, using auto-select");
-                } else {
-                    let result = if multiple {
-                        selected
-                    } else {
-                        selected.into_iter().take(1).collect()
-                    };
-                    tracing::info!(
-                        count = result.len(),
-                        sources = ?result.iter().map(|s| &s.name).collect::<Vec<_>>(),
-                        "Sources selected via picker"
-                    );
-                    return result;
-                }
-            }
-            Err(e) => {
-                tracing::warn!(
-                    error = %e,
-                    picker = %picker_cmd,
-                    "Source picker failed, falling back to auto-select"
-                );
-            }
-        }
-    }
-
-    // Auto-select: first source (default behavior)
-    let selected = sources.first().cloned().into_iter().collect::<Vec<_>>();
-    tracing::debug!(
-        sources = ?selected.iter().map(|s| &s.name).collect::<Vec<_>>(),
-        "Auto-selected sources"
-    );
-    selected
-}
-
-/// Run an external source picker tool.
-///
-/// Writes available source names to the tool's stdin and reads selected
-/// source name(s) from stdout.
-fn run_source_picker(picker_cmd: &str, sources: &[SourceInfo]) -> Result<Vec<SourceInfo>, String> {
-    use std::{
-        io::Write,
-        process::{Command, Stdio},
-    };
-
-    // Build the input: one source per line as "name\tdescription\tWxH"
-    let input: String = sources
-        .iter()
-        .map(|s| format!("{}\t{}\t{}x{}", s.name, s.description, s.width, s.height))
-        .collect::<Vec<_>>()
-        .join("\n");
-
-    // Parse the command (support basic shell-like splitting)
-    let parts: Vec<&str> = picker_cmd.split_whitespace().collect();
-    if parts.is_empty() {
-        return Err("Empty picker command".to_string());
-    }
-
-    let mut cmd = Command::new(parts[0]);
-    for arg in &parts[1..] {
-        cmd.arg(arg);
-    }
-
-    let mut child = cmd
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn()
-        .map_err(|e| format!("Failed to spawn picker: {e}"))?;
-
-    // Write source list to stdin
-    if let Some(mut stdin) = child.stdin.take() {
-        let _ = stdin.write_all(input.as_bytes());
-    }
-
-    let output = child
-        .wait_with_output()
-        .map_err(|e| format!("Picker process error: {e}"))?;
-
-    if !output.status.success() {
-        return Err(format!(
-            "Picker exited with status {}",
-            output.status.code().unwrap_or(-1)
-        ));
-    }
-
-    // Parse selected source names from stdout
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let selected_names: Vec<&str> = stdout
-        .lines()
-        .map(|line| {
-            // Support tab-separated format (take first column = name)
-            line.split('\t').next().unwrap_or(line).trim()
-        })
-        .filter(|name| !name.is_empty())
-        .collect();
-
-    // Match selected names to source objects
-    let selected: Vec<SourceInfo> = selected_names
-        .iter()
-        .filter_map(|name| sources.iter().find(|s| s.name == *name).cloned())
-        .collect();
-
-    Ok(selected)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::SourceInfo;
-
-    fn test_sources() -> Vec<SourceInfo> {
-        vec![
-            SourceInfo {
-                id: 1,
-                name: "eDP-1".to_string(),
-                description: "Built-in Display".to_string(),
-                width: 1920,
-                height: 1080,
-                refresh_rate: 60000,
-                x: 0,
-                y: 0,
-                scale: 1,
-                source_type: SourceType::Monitor,
-            },
-            SourceInfo {
-                id: 2,
-                name: "HDMI-A-1".to_string(),
-                description: "External Monitor".to_string(),
-                width: 2560,
-                height: 1440,
-                refresh_rate: 60000,
-                x: 1920,
-                y: 0,
-                scale: 1,
-                source_type: SourceType::Monitor,
-            },
-        ]
-    }
-
     #[test]
-    fn test_auto_select_first_source() {
-        let sources = test_sources();
-        let selected = select_sources_with_picker(&sources, false);
-        assert_eq!(selected.len(), 1);
-        assert_eq!(selected[0].name, "eDP-1");
-    }
-
-    #[test]
-    fn test_auto_select_empty_sources() {
-        let selected = select_sources_with_picker(&[], false);
-        assert!(selected.is_empty());
-    }
-
-    #[test]
-    fn test_picker_with_echo() {
-        // Use echo as a trivial picker that outputs its argument
-        let sources = test_sources();
-        let selected = run_source_picker("echo HDMI-A-1", &sources);
-        assert!(selected.is_ok());
-        let selected = selected.unwrap();
-        assert_eq!(selected.len(), 1);
-        assert_eq!(selected[0].name, "HDMI-A-1");
-    }
-
-    #[test]
-    fn test_picker_nonexistent_tool() {
-        let sources = test_sources();
-        let result = run_source_picker("/nonexistent/picker/tool", &sources);
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn test_picker_failing_tool() {
-        let sources = test_sources();
-        let result = run_source_picker("false", &sources);
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn restore_data_accepts_current_and_legacy_vendors() {
+    fn restore_vendors_remain_backward_readable() {
         assert!(is_supported_restore_vendor("knave"));
         assert!(is_supported_restore_vendor("generic"));
         assert!(!is_supported_restore_vendor("other"));

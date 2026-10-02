@@ -1,7 +1,7 @@
 //! PipeWire video source stream management.
 //!
 //! Each stream corresponds to one captured output. The stream is created as a
-//! PipeWire Video/Source node and connected with `ALLOC_BUFFERS` so PipeWire
+//! PipeWire Video/Source node and connected with `MAP_BUFFERS` so PipeWire
 //! allocates the buffer pool. Frames are queued by copying screencopy data
 //! into dequeued buffers, normalized to the stream's declared `BGRx` order
 //! (see [`PipeWireVideoStream::queue_frame`]) since the compositor may
@@ -34,6 +34,10 @@ pub struct StreamConfig {
 /// (like the xdg-desktop-portal frontend) connect to this node to receive
 /// screen capture frames.
 pub struct PipeWireVideoStream {
+    // Listener must be dropped before its stream.
+    _listener: pipewire::stream::StreamListener<()>,
+    width: u32,
+    height: u32,
     /// The underlying PipeWire stream.
     // SAFETY: StreamBox borrows from CoreBox, but we ensure streams are destroyed
     // before the core in run_thread() cleanup. The 'static is a lifetime erasure
@@ -47,7 +51,7 @@ impl PipeWireVideoStream {
     /// Create and connect a new video source stream.
     ///
     /// The stream is created with `media.class=Video/Source` and connected
-    /// as an output direction with `ALLOC_BUFFERS` flag.
+    /// as an output direction with mapped shared-memory buffers.
     pub fn create(
         core: &pipewire::core::CoreBox<'_>,
         config: &StreamConfig,
@@ -83,6 +87,27 @@ impl PipeWireVideoStream {
         )]
         let stream: StreamBox<'static> = unsafe { std::mem::transmute(stream) };
 
+        let width = config.width;
+        let height = config.height;
+        let listener = stream
+            .add_local_listener_with_user_data(())
+            .param_changed(move |stream, (), id, param| {
+                if id != libspa::param::ParamType::Format.as_raw() || param.is_none() {
+                    return;
+                }
+                if let Some(bytes) = Self::build_buffers_pod(width, height) {
+                    if let Some(pod) = libspa::pod::Pod::from_bytes(&bytes) {
+                        if let Err(error) = stream.update_params(&mut [pod]) {
+                            tracing::error!(%error, "Failed to negotiate capture buffers");
+                        }
+                    }
+                }
+            })
+            .register()
+            .map_err(|e| {
+                PortalError::PipeWire(format!("Failed to register stream listener: {e}"))
+            })?;
+
         // Build the SPA video format parameter for the stream.
         let format_pod_bytes =
             Self::build_video_format_pod(config.width, config.height, config.framerate);
@@ -109,13 +134,13 @@ impl PipeWireVideoStream {
 
         // Connect as an output (we produce frames).
         // MAP_BUFFERS: we want CPU-accessible buffers to copy screencopy data into.
-        // ALLOC_BUFFERS: PipeWire allocates the buffer pool.
+        // PipeWire allocates the negotiated pool; ALLOC_BUFFERS would require us to allocate it.
         // DRIVER: this stream drives the graph timing (it's a live source).
         stream
             .connect(
                 libspa::utils::Direction::Output,
                 None,
-                StreamFlags::MAP_BUFFERS | StreamFlags::ALLOC_BUFFERS | StreamFlags::DRIVER,
+                StreamFlags::MAP_BUFFERS | StreamFlags::DRIVER,
                 &mut [pod],
             )
             .map_err(|e| PortalError::PipeWire(format!("Failed to connect stream: {e}")))?;
@@ -125,7 +150,13 @@ impl PipeWireVideoStream {
         // run main loop iterations and call refresh_node_id() to get the real ID.
         let node_id = stream.node_id();
 
-        Ok(Self { stream, node_id })
+        Ok(Self {
+            _listener: listener,
+            width,
+            height,
+            stream,
+            node_id,
+        })
     }
 
     /// Build a raw SPA video format POD.
@@ -208,6 +239,39 @@ impl PipeWireVideoStream {
         }
     }
 
+    fn build_buffers_pod(width: u32, height: u32) -> Option<Vec<u8>> {
+        use libspa::pod::{Object, Property, PropertyFlags, Value, serialize::PodSerializer};
+        let stride = i32::try_from(width.checked_mul(4)?).ok()?;
+        let size = i32::try_from(width.checked_mul(height)?.checked_mul(4)?).ok()?;
+        let props = [
+            (libspa::sys::SPA_PARAM_BUFFERS_buffers, 4),
+            (libspa::sys::SPA_PARAM_BUFFERS_blocks, 1),
+            (libspa::sys::SPA_PARAM_BUFFERS_size, size),
+            (libspa::sys::SPA_PARAM_BUFFERS_stride, stride),
+            (
+                libspa::sys::SPA_PARAM_BUFFERS_dataType,
+                1 << libspa::sys::SPA_DATA_MemFd,
+            ),
+        ]
+        .into_iter()
+        .map(|(key, value)| Property {
+            key,
+            flags: PropertyFlags::empty(),
+            value: Value::Int(value),
+        })
+        .collect();
+        PodSerializer::serialize(
+            std::io::Cursor::new(Vec::new()),
+            &Value::Object(Object {
+                type_: libspa::sys::SPA_TYPE_OBJECT_ParamBuffers,
+                id: libspa::sys::SPA_PARAM_Buffers,
+                properties: props,
+            }),
+        )
+        .ok()
+        .map(|(cursor, _)| cursor.into_inner())
+    }
+
     /// Get the PipeWire node ID for this stream.
     pub fn node_id(&self) -> u32 {
         self.node_id
@@ -258,6 +322,15 @@ impl PipeWireVideoStream {
         stride: u32,
         format: u32,
     ) -> Result<(), PortalError> {
+        if width != self.width
+            || height != self.height
+            || stride != width.saturating_mul(4)
+            || data.len() < (u64::from(stride) * u64::from(height)) as usize
+        {
+            return Err(PortalError::PipeWire(
+                "Capture dimensions changed; restart the stream".into(),
+            ));
+        }
         // Dequeue a buffer from PipeWire
         let mut buffer = self.stream.dequeue_buffer().ok_or_else(|| {
             PortalError::PipeWire("No buffer available from PipeWire stream".to_string())
@@ -275,7 +348,10 @@ impl PipeWireVideoStream {
 
         // Get the mapped data slice and copy frame pixels
         if let Some(dest_slice) = pw_data.data() {
-            let copy_len = data.len().min(dest_slice.len());
+            let copy_len = (u64::from(stride) * u64::from(height)) as usize;
+            if dest_slice.len() < copy_len {
+                return Err(PortalError::PipeWire("Capture buffer is too small".into()));
+            }
             dest_slice[..copy_len].copy_from_slice(&data[..copy_len]);
             if crate::types::wl_shm_format_needs_rb_swap(format) {
                 crate::types::swap_rb_channels_in_place(
@@ -297,8 +373,11 @@ impl PipeWireVideoStream {
         *chunk.size_mut() = stride * height;
         *chunk.stride_mut() = stride as i32;
 
-        // Buffer is automatically queued when dropped (RAII via Drop impl)
-        Ok(())
+        // Queue before waking the graph that consumes this frame.
+        drop(buffer);
+        self.stream
+            .trigger_process()
+            .map_err(|e| PortalError::PipeWire(format!("Failed to drive capture graph: {e}")))
     }
 
     /// Disconnect and clean up the stream.

@@ -70,23 +70,17 @@ impl ScreenshotInterface {
 
         tracing::debug!(app_id = app_id, "Screenshot.Screenshot called");
 
-        // Register Request object at handle path for cancellation support
-        let request_iface = super::RequestInterface::standalone();
-        let _ = server.at(&handle, request_iface).await;
-
-        // Get the first available source (primary monitor)
-        let output_id = {
-            let backend = self.capture_backend.lock().await;
-            let sources = backend
-                .get_sources(&[SourceType::Monitor])
-                .map_err(|e| zbus::fdo::Error::Failed(e.to_string()))?;
-
-            if let Some(source) = sources.first() {
-                source.id
-            } else {
-                tracing::error!("No outputs available for screenshot");
-                return Ok((Response::Other.to_u32(), empty_results()));
-            }
+        let (request, mut cancelled) = super::RequestInterface::cancellable();
+        server.at(&handle, request).await?;
+        let result = async {
+        let sources = self.capture_backend.lock().await.get_sources(&[SourceType::Monitor])
+            .map_err(|e| zbus::fdo::Error::Failed(e.to_string()))?;
+        let selected = crate::picker::select(app_id, handle.as_str(), knave_portal_api::Operation::Screenshot,
+            false, &sources, &self.capture_tx, cancelled.clone()).await;
+        let output_id = match selected {
+            Ok(selected) if !selected.is_empty() => selected[0].id,
+            Ok(_) => return Ok((Response::Cancelled.to_u32(), empty_results())),
+            Err(error) => { tracing::warn!(%error, "screenshot selection failed"); return Ok((Response::Other.to_u32(), empty_results())); }
         };
 
         // Request a one-shot frame capture via the Wayland event loop
@@ -103,8 +97,10 @@ impl ScreenshotInterface {
             })?;
 
         // Wait for the frame data from the event loop
-        let screenshot_data = reply_rx
-            .await
+        let screenshot_data = tokio::select! {
+            result = tokio::time::timeout(std::time::Duration::from_secs(5), reply_rx) => result.map_err(|_| zbus::fdo::Error::Failed("screenshot timed out".into()))?,
+            _ = cancelled.changed() => return Ok((Response::Cancelled.to_u32(), empty_results())),
+        }
             .map_err(|_| zbus::fdo::Error::Failed("Screenshot capture channel closed".to_string()))?
             .map_err(|e| zbus::fdo::Error::Failed(format!("Screenshot capture failed: {e}")))?;
 
@@ -124,17 +120,20 @@ impl ScreenshotInterface {
             results.insert("uri".to_string(), val);
         }
 
-        // Remove Request object after method completes
-        let _ = server.remove::<super::RequestInterface, _>(&handle).await;
-
         Ok((Response::Success.to_u32(), results))
+        }.await;
+        let _ = server.remove::<super::RequestInterface, _>(&handle).await;
+        result
     }
 
     /// Pick a color from the screen.
     ///
-    /// Captures a frame and returns the color at the center point. A full
-    /// implementation would present a crosshair UI for the user to click.
+    /// Returns NotSupported until a native pixel-selection UI is implemented.
     #[zbus(name = "PickColor")]
+    #[expect(
+        clippy::unused_async_trait_impl,
+        reason = "zbus interface requires async"
+    )]
     async fn pick_color(
         &self,
         handle: ObjectPath<'_>,
@@ -143,64 +142,11 @@ impl ScreenshotInterface {
         options: HashMap<String, OwnedValue>,
         #[zbus(object_server)] server: &zbus::ObjectServer,
     ) -> zbus::fdo::Result<(u32, HashMap<String, OwnedValue>)> {
-        let _ = (parent_window, &options);
-        tracing::debug!(app_id = app_id, "Screenshot.PickColor called");
-
-        // Register Request object at handle path for cancellation support
-        let request_iface = super::RequestInterface::standalone();
-        let _ = server.at(&handle, request_iface).await;
-
-        // Get the first available source
-        let output_id = {
-            let backend = self.capture_backend.lock().await;
-            let sources = backend
-                .get_sources(&[SourceType::Monitor])
-                .map_err(|e| zbus::fdo::Error::Failed(e.to_string()))?;
-
-            if let Some(source) = sources.first() {
-                source.id
-            } else {
-                return Ok((Response::Other.to_u32(), empty_results()));
-            }
-        };
-
-        // Capture a single frame
-        let (reply_tx, reply_rx) =
-            tokio::sync::oneshot::channel::<std::result::Result<ScreenshotData, String>>();
-
-        self.capture_tx
-            .send(CaptureCommand::CaptureScreenshot {
-                output_global_name: output_id,
-                reply: reply_tx,
-            })
-            .map_err(|e| {
-                zbus::fdo::Error::Failed(format!("Failed to send screenshot command: {e}"))
-            })?;
-
-        let screenshot_data = reply_rx
-            .await
-            .map_err(|_| zbus::fdo::Error::Failed("Color pick channel closed".to_string()))?
-            .map_err(|e| zbus::fdo::Error::Failed(format!("Color pick capture failed: {e}")))?;
-
-        // Pick the pixel color (via external tool or center fallback)
-        let (red, green, blue) = pick_color_from_frame(&screenshot_data);
-
-        tracing::info!(
-            red = red,
-            green = green,
-            blue = blue,
-            "Color picked from center of screen"
-        );
-
-        let mut results = HashMap::new();
-        if let Ok(color) = OwnedValue::try_from(Value::from((red, green, blue))) {
-            results.insert("color".to_string(), color);
-        }
-
-        // Remove Request object after method completes
-        let _ = server.remove::<super::RequestInterface, _>(&handle).await;
-
-        Ok((Response::Success.to_u32(), results))
+        let _ = (handle, app_id, parent_window, options, server);
+        // A center-pixel fallback does not implement user-selected color picking.
+        Err(zbus::fdo::Error::NotSupported(
+            "Native color picking is not implemented".into(),
+        ))
     }
 
     // === Properties ===
@@ -230,19 +176,14 @@ fn encode_and_save_png(data: &ScreenshotData) -> Result<String, String> {
         data.format_raw,
     );
 
-    // Create temp file
-    let dir = std::env::temp_dir();
-    let filename = format!(
-        "xdp-screenshot-{}.png",
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map_or(0, |d| d.as_millis())
-    );
-    let path = dir.join(filename);
+    // Unpredictable, owner-only file; retained for the frontend to export.
+    let temporary = tempfile::Builder::new()
+        .prefix("knave-screenshot-")
+        .suffix(".png")
+        .tempfile()
+        .map_err(|e| format!("Failed to create screenshot: {e}"))?;
+    let (file, path) = temporary.keep().map_err(|e| e.to_string())?;
 
-    // Encode PNG
-    let file =
-        std::fs::File::create(&path).map_err(|e| format!("Failed to create temp file: {e}"))?;
     let mut encoder = png::Encoder::new(std::io::BufWriter::new(file), data.width, data.height);
     encoder.set_color(png::ColorType::Rgba);
     encoder.set_depth(png::BitDepth::Eight);
@@ -270,7 +211,7 @@ fn encode_and_save_png(data: &ScreenshotData) -> Result<String, String> {
 /// for the full explanation) -- `argb8888`/`xrgb8888` land as `[B,G,R,X/A]`,
 /// `xbgr8888`/`abgr8888` (e.g. wlroots + virtio-gpu) land as `[R,G,B,X/A]`.
 /// Reading the wrong order here transposes red and blue in the output PNG.
-fn convert_bgrx_to_rgba(
+pub(crate) fn convert_bgrx_to_rgba(
     data: &[u8],
     width: u32,
     height: u32,
@@ -310,110 +251,10 @@ fn convert_bgrx_to_rgba(
     rgba
 }
 
-/// Pick a color from the captured frame.
-///
-/// If `XDP_KNAVE_COLOR_PICKER` is set, it is invoked as an external tool:
-/// - Receives the screenshot path (temporary PNG) on stdin
-/// - Should output `x y` coordinates (pixel position) to stdout
-/// - The color at those coordinates is extracted
-///
-/// Falls back to the center pixel when no external tool is configured.
-///
-/// Returns (r, g, b) as f64 values in the range 0.0 to 1.0.
-fn pick_color_from_frame(data: &ScreenshotData) -> (f64, f64, f64) {
-    // Check for external color picker tool
-    if let Ok(picker_cmd) = crate::env::var("COLOR_PICKER") {
-        match run_color_picker(&picker_cmd, data) {
-            Ok(color) => return color,
-            Err(e) => {
-                tracing::warn!(
-                    error = %e,
-                    picker = %picker_cmd,
-                    "Color picker failed, falling back to center pixel"
-                );
-            }
-        }
-    }
-
-    pick_center_color(data)
-}
-
-/// Run an external color picker tool.
-///
-/// Saves the screenshot as a temporary PNG, passes the path to the tool's
-/// stdin, and reads `x y` coordinates from stdout. Returns the color at
-/// those coordinates.
-fn run_color_picker(picker_cmd: &str, data: &ScreenshotData) -> Result<(f64, f64, f64), String> {
-    use std::{
-        io::Write,
-        process::{Command, Stdio},
-    };
-
-    // Save the screenshot to a temporary PNG file
-    let png_path = encode_and_save_png(data)?;
-    let file_path = png_path.strip_prefix("file://").unwrap_or(&png_path);
-
-    // Parse the command
-    let parts: Vec<&str> = picker_cmd.split_whitespace().collect();
-    if parts.is_empty() {
-        return Err("Empty picker command".to_string());
-    }
-
-    let mut cmd = Command::new(parts[0]);
-    for arg in &parts[1..] {
-        cmd.arg(arg);
-    }
-
-    let mut child = cmd
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn()
-        .map_err(|e| format!("Failed to spawn color picker: {e}"))?;
-
-    // Write the screenshot path to stdin
-    if let Some(mut stdin) = child.stdin.take() {
-        let _ = stdin.write_all(file_path.as_bytes());
-    }
-
-    let output = child
-        .wait_with_output()
-        .map_err(|e| format!("Color picker process error: {e}"))?;
-
-    // Clean up temp file
-    let _ = std::fs::remove_file(file_path);
-
-    if !output.status.success() {
-        return Err(format!(
-            "Color picker exited with status {}",
-            output.status.code().unwrap_or(-1)
-        ));
-    }
-
-    // Parse `x y` from stdout
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let coords: Vec<&str> = stdout.split_whitespace().collect();
-    if coords.len() < 2 {
-        return Err(format!(
-            "Color picker output not 'x y': {:?}",
-            stdout.trim()
-        ));
-    }
-
-    let x: u32 = coords[0]
-        .parse()
-        .map_err(|e| format!("Bad x coordinate: {e}"))?;
-    let y: u32 = coords[1]
-        .parse()
-        .map_err(|e| format!("Bad y coordinate: {e}"))?;
-
-    // Extract color at the given coordinates
-    Ok(pick_color_at(data, x, y))
-}
-
 /// Pick the color at specific coordinates in the captured frame.
 ///
 /// Returns (r, g, b) as f64 values in the range 0.0 to 1.0.
+#[cfg(test)]
 fn pick_color_at(data: &ScreenshotData, px: u32, py: u32) -> (f64, f64, f64) {
     let px = px.min(data.width.saturating_sub(1));
     let py = py.min(data.height.saturating_sub(1));
@@ -433,6 +274,7 @@ fn pick_color_at(data: &ScreenshotData, px: u32, py: u32) -> (f64, f64, f64) {
 /// Pick the color at the center of the captured frame.
 ///
 /// Returns (r, g, b) as f64 values in the range 0.0 to 1.0.
+#[cfg(test)]
 fn pick_center_color(data: &ScreenshotData) -> (f64, f64, f64) {
     let cx = data.width / 2;
     let cy = data.height / 2;
