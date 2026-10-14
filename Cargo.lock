@@ -636,6 +636,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "knave-capture-protocol"
+version = "0.1.0"
+source = "git+https://github.com/knave-de/knave.git?rev=499584e2e68ddc4527157ca69d0c0c7d711e8daf#499584e2e68ddc4527157ca69d0c0c7d711e8daf"
+dependencies = [
+ "wayland-backend",
+ "wayland-client",
+ "wayland-protocols",
+ "wayland-scanner",
+]
+
+[[package]]
 name = "knave-config"
 version = "0.1.0"
 source = "git+https://github.com/knave-de/knave.git?rev=e84f31a382fb4a0d83a199f2a4b6b8d5618253ed#e84f31a382fb4a0d83a199f2a4b6b8d5618253ed"
@@ -649,7 +660,7 @@ dependencies = [
 [[package]]
 name = "knave-portal-api"
 version = "0.1.0"
-source = "git+https://github.com/knave-de/knave.git?rev=e84f31a382fb4a0d83a199f2a4b6b8d5618253ed#e84f31a382fb4a0d83a199f2a4b6b8d5618253ed"
+source = "git+https://github.com/knave-de/knave.git?rev=499584e2e68ddc4527157ca69d0c0c7d711e8daf#499584e2e68ddc4527157ca69d0c0c7d711e8daf"
 dependencies = [
  "serde",
  "serde_json",
@@ -1731,6 +1742,7 @@ dependencies = [
  "enumflags2",
  "evdev",
  "futures",
+ "knave-capture-protocol",
  "knave-config",
  "knave-portal-api",
  "lamco-data-control",

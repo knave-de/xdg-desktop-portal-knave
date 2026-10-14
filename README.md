@@ -9,10 +9,10 @@
 It provides the XDG Desktop Portal backend services needed by sandboxed and
 other desktop applications in a Wayland session.
 
-Knave integrates monitor screenshots and sharing with Villain's standard
+Knave integrates monitor screenshots and screen, window and workspace sharing with Villain's standard
 `ext-image-copy-capture-v1` protocol and Knave Shell's own Rust/wgpu UI toolkit.
-The backend pins Knave configuration and the private picker contract to a merged
-Git revision. Install a matching Knave Shell binary for native consent. Consent starts with no selected source; previews,
+The backend pins Knave configuration and the private picker contract to immutable
+Git revisions. Install a matching Knave Shell binary for native consent. Consent starts with no selected source; previews,
 explicit confirmation, cancellation, and a Stop sharing control belong to Shell.
 
 The backend connects to the compositor as a standalone Wayland client and uses
@@ -28,12 +28,12 @@ version.
 
 | Portal Interface | Version | Primary Protocol | Fallback |
 |------------------|---------|------------------|----------|
-| `ScreenCast` | v6 | ext-image-copy-capture-v1 (monitor only) | wlr-screencopy-v1 |
+| `ScreenCast` | v6 | ext-image-copy-capture-v1 (screen, window, workspaces) | wlr-screencopy-v1 |
 | `Settings` | v2 | Canonical Knave configuration | Environment / GTK_THEME |
 | `Screenshot` | v2 | Interactive monitor capture to PNG | -- |
 
 The shipped descriptor advertises these three interfaces. RemoteDesktop,
-InputCapture, Clipboard, window sharing, cursor metadata and native color picking
+InputCapture, Clipboard, cursor metadata and native color picking
 are not part of the supported Knave integration. PickColor returns NotSupported.
 Without capture protocols the backend serves Settings independently of PipeWire.
 
@@ -203,8 +203,19 @@ unset; Knave-prefixed values take precedence.
 The native command is `knave-shell portal-picker`. It reads one versioned JSON
 request on stdin and returns one versioned JSON reply on stdout. The
 `knave-portal-api` crate defines and validates this private contract. Requests are
-limited to eight sources and 2 MiB, replies to 4 KiB, with one consent dialog at a
-time and a 120-second consent deadline. Sharing controls live until session close.
+limited to 64 sources and 2 MiB in v2 (monitor-only v1 accepts eight),
+replies to 4 KiB, with one consent dialog at a time and a 120-second consent deadline. Sharing controls live until session close.
+
+Native sharing offers Screen, Window and Workspaces tabs when supported and
+permitted by the application. A single screen/window card starts sharing directly.
+Choose any workspace set and confirm once: allowed workspaces follow your desktop;
+excluded workspaces freeze the last allowed frame. Before the first allowed frame,
+the stream is black. Workspace capture excludes shell layers and overview panes.
+Window capture follows only the selected window, including when covered or on
+another workspace. Resizing fits it inside the initial canvas; closing it ends
+sharing. If its dimensions change between preview and startup, sharing closes;
+select it again. Multi-monitor selection is out of scope. Deploy the matching Villain,
+Shell and portal; see Knave ADR 0007.
 
 `XDP_KNAVE_SOURCE_PICKER` (or deprecated `XDP_GENERIC_SOURCE_PICKER`) retains the
 legacy tab-separated monitor input and output-name reply for development. Empty
@@ -228,6 +239,34 @@ and waits for Stop sharing to close the session. Source approval must be perform
 through the native UI; do not use an automatic-selection override on a user session.
 For a manual check, set `KNAVE_SMOKE_CLOSE_TIMEOUT=300` to allow five minutes for
 Stop sharing (default 10 seconds; valid range 1–600).
+For repeatable native tests, attach private services to a fresh desktop-harness
+run (from this repository). Keep the fixture running in a separate terminal:
+
+```sh
+run=../knave/build/desktop-harness/share-001
+python3 ../knave/scripts/desktop-harness.py --run "$run" start --display 104 --vnc-port 6004
+python3 scripts/sharing-fixture.py --run "$run" --installed
+```
+
+In another terminal, reuse its environment for the real client or OBS:
+
+```sh
+run=../knave/build/desktop-harness/share-001
+python3 scripts/sharing-fixture.py --run "$run" --exec env KNAVE_SMOKE_SOURCE_TYPES=3 KNAVE_SMOKE_CLOSE_TIMEOUT=300 target/release/examples/knave_smoke share
+# Or: --exec obs --multi --disable-updater
+```
+
+`--installed` tests the installed backend and Shell; omit it for release workspace
+binaries. The compositor comes from the harness manifest. The fixture owns its
+private D-Bus, PipeWire and WirePlumber process groups, cleans them on exit, and
+never restarts host services. Use a new run directory each time. The harness's
+click, screenshot and record commands and VNC handoff work on this same desktop.
+Stop the fixture before stopping the harness. The smoke consumer can save bounded
+raw samples with `KNAVE_SMOKE_CAPTURE_SECONDS=15` and `KNAVE_SMOKE_FRAME_DIR=PATH`;
+`KNAVE_SMOKE_SOURCE_TYPES` accepts 1 (screen/workspaces), 2 (window), or 3 (both).
+`knave_workspace_probe 0` and `knave_workspace_probe 1024` check invalid masks only
+on this private fixture; the compositor must remain responsive afterward.
+
 See [the validation record](docs/knave-validation.md) for measured results and limits.
 
 ## Compositor Compatibility

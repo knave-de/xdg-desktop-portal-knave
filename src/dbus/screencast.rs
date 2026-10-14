@@ -150,16 +150,22 @@ impl ScreenCastInterface {
             .iter()
             .map(|s| {
                 let mut props: HashMap<String, OwnedValue> = HashMap::new();
-                props.insert(
-                    "position".to_string(),
-                    OwnedValue::try_from(Value::from((s.position.0, s.position.1)))
-                        .expect("tuple Value converts to OwnedValue"),
-                );
-                props.insert(
-                    "size".to_string(),
-                    OwnedValue::try_from(Value::from((s.size.0, s.size.1)))
-                        .expect("tuple Value converts to OwnedValue"),
-                );
+                if s.source_type == SourceType::Monitor {
+                    props.insert(
+                        "position".to_string(),
+                        OwnedValue::try_from(Value::from((s.position.0, s.position.1)))
+                            .expect("tuple Value converts to OwnedValue"),
+                    );
+                }
+                // The portal contract specifies signed (ii), not unsigned (uu).
+                if let (Ok(width), Ok(height)) = (i32::try_from(s.size.0), i32::try_from(s.size.1))
+                {
+                    props.insert(
+                        "size".to_string(),
+                        OwnedValue::try_from(Value::from((width, height)))
+                            .expect("tuple Value converts to OwnedValue"),
+                    );
+                }
                 props.insert(
                     "source_type".to_string(),
                     OwnedValue::from(s.source_type.to_bits()),
@@ -510,6 +516,28 @@ impl ScreenCastInterface {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn window_stream_size_is_signed_and_has_no_monitor_position() {
+        let stream = StreamInfo {
+            node_id: 7,
+            serial: None,
+            source_id: 3,
+            position: (0, 0),
+            size: (640, 480),
+            source_type: SourceType::Window,
+            mapping_id: None,
+            scale: 1,
+            properties: HashMap::new(),
+        };
+        let mut results = ScreenCastInterface::build_stream_results(&[stream]);
+        let streams: Vec<(u32, HashMap<String, OwnedValue>)> =
+            results.remove("streams").unwrap().try_into().unwrap();
+        let (_, mut properties) = streams.into_iter().next().unwrap();
+        let size: (i32, i32) = properties.remove("size").unwrap().try_into().unwrap();
+        assert_eq!(size, (640, 480));
+        assert!(!properties.contains_key("position"));
+    }
+
     #[test]
     fn restore_vendors_remain_backward_readable() {
         assert!(is_supported_restore_vendor("knave"));

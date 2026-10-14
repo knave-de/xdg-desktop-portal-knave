@@ -180,9 +180,9 @@ pub fn create_capture_backend(
             if prefs.handshake_timeout_ms > 0 {
                 tracing::info!("  Handshake timeout: {}ms", prefs.handshake_timeout_ms);
             }
-            Ok(Box::new(ExtCaptureBackend::new(
-                sources, pipewire, capture_tx,
-            )))
+            let mut backend = ExtCaptureBackend::new(sources, pipewire, capture_tx);
+            backend.windows_supported = protocols.ext_foreign_toplevel_capture;
+            Ok(Box::new(backend))
         }
         Ok(CaptureProtocol::WlrScreencopy) => {
             tracing::info!("Using wlr-screencopy-v1 for screen capture");

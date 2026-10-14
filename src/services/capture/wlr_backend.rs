@@ -41,7 +41,10 @@ impl WlrCaptureBackend {
         capture_tx: mpsc::Sender<CaptureCommand>,
     ) -> Self {
         Self {
-            sources,
+            sources: sources
+                .into_iter()
+                .filter(|source| source.target == crate::types::CaptureTarget::Monitor)
+                .collect(),
             active_streams: HashMap::new(),
             pipewire,
             capture_tx,
@@ -134,6 +137,7 @@ impl CaptureBackend for WlrCaptureBackend {
             // The event loop will request frames from the compositor and deliver
             // pixel data to PipeWire via queue_buffer().
             if let Err(e) = self.capture_tx.send(CaptureCommand::StartCapture {
+                target: source.target,
                 output_global_name: source.id,
                 node_id,
                 width: source.width,
@@ -196,7 +200,10 @@ impl CaptureBackend for WlrCaptureBackend {
             new_count = sources.len(),
             "Updating wlr capture sources (output hotplug)"
         );
-        self.sources = sources;
+        self.sources = sources
+            .into_iter()
+            .filter(|source| source.target == crate::types::CaptureTarget::Monitor)
+            .collect();
     }
 }
 

@@ -655,29 +655,38 @@ impl PortalBackend {
     ) {
         use std::time::Duration;
         let mut interval = tokio::time::interval(Duration::from_secs(2));
-        let mut last_source_count = 0u32;
+        let mut last_sources = Vec::new();
+        let changed = {
+            let Ok(state) = shared_wayland.lock() else {
+                return;
+            };
+            Arc::clone(&state.changed)
+        };
         let mut last_zone_set: Option<u32> = None;
 
         loop {
-            interval.tick().await;
+            tokio::select! { _ = interval.tick() => {}, () = changed.notified() => {} }
 
-            let (current_sources, current_zone_set) = {
-                let Ok(state) = shared_wayland.lock() else {
+            let (current_sources, current_zone_set, failed_nodes) = {
+                let Ok(mut state) = shared_wayland.lock() else {
                     continue;
                 };
-                (state.sources.clone(), state.zone_set)
+                (
+                    state.sources.clone(),
+                    state.zone_set,
+                    std::mem::take(&mut state.failed_nodes),
+                )
             };
 
-            let count = current_sources.len() as u32;
-            if count != last_source_count {
-                tracing::info!(
-                    old_count = last_source_count,
-                    new_count = count,
-                    "Output count changed, updating capture backend sources"
-                );
-                let mut backend = capture_backend.lock().await;
-                backend.update_sources(current_sources);
-                last_source_count = count;
+            if current_sources != last_sources {
+                last_sources.clone_from(&current_sources);
+                capture_backend.lock().await.update_sources(current_sources);
+            }
+            if !failed_nodes.is_empty() {
+                session_manager
+                    .lock()
+                    .await
+                    .stop_failed_capture_nodes(&failed_nodes);
             }
 
             if last_zone_set != Some(current_zone_set) {

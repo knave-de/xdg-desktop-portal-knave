@@ -39,13 +39,40 @@ pub(crate) fn request(
         multiple,
         sources: sources
             .iter()
-            .map(|s| Source {
-                id: s.id,
-                name: s.name.clone(),
-                description: s.description.clone(),
-                width: s.width,
-                height: s.height,
-                preview_png: None,
+            .flat_map(|s| {
+                if operation == Operation::Sharing
+                    && let crate::types::CaptureTarget::WorkspaceSet { allowed, .. } = s.target
+                {
+                    return (1..=32)
+                        .filter(|workspace| allowed & (1 << (workspace - 1)) != 0)
+                        .map(|workspace| Source {
+                            id: 0x4000_0000 + workspace,
+                            name: format!("Workspace {workspace}"),
+                            description: s.description.clone(),
+                            width: s.width,
+                            height: s.height,
+                            preview_png: None,
+                            kind: knave_portal_api::SourceKind::Workspace { workspace },
+                        })
+                        .collect::<Vec<_>>();
+                }
+                vec![Source {
+                    id: s.id,
+                    name: s.name.clone(),
+                    description: s.description.clone(),
+                    width: s.width,
+                    height: s.height,
+                    preview_png: None,
+                    kind: match s.target {
+                        crate::types::CaptureTarget::Window { .. } => {
+                            knave_portal_api::SourceKind::Window
+                        }
+                        crate::types::CaptureTarget::Workspace { workspace, .. } => {
+                            knave_portal_api::SourceKind::Workspace { workspace }
+                        }
+                        _ => knave_portal_api::SourceKind::Monitor,
+                    },
+                }]
             })
             .collect(),
     }
@@ -168,14 +195,28 @@ pub(crate) async fn select(
     let _permit = DIALOG
         .try_acquire()
         .map_err(|_| "another portal dialog is active")?;
+    let monitor_only =
+        operation == Operation::Screenshot || crate::env::var("SOURCE_PICKER").is_ok();
+    let mut sources: Vec<_> = sources
+        .iter()
+        .filter(|source| !monitor_only || source.target == crate::types::CaptureTarget::Monitor)
+        .cloned()
+        .collect();
     if sources.len() > MAX_SOURCES {
         return Err("too many capture sources".into());
     }
-    let mut request = request(app_id, id, operation, multiple, sources);
+    let mut request = request(app_id, id, operation, multiple, &sources);
     request.validate()?;
-    for source in &mut request.sources {
+    let mut preview_bytes = 0;
+    let mut unavailable = Vec::new();
+    for (index, source) in request.sources.iter_mut().enumerate() {
+        // Workspace choices are checkboxes; capture no workspace preview before consent.
+        if matches!(source.kind, knave_portal_api::SourceKind::Workspace { .. }) {
+            continue;
+        }
         let (reply, rx) = tokio::sync::oneshot::channel();
         tx.send(CaptureCommand::CaptureScreenshot {
+            target: sources[index].target,
             output_global_name: source.id,
             reply,
         })
@@ -185,14 +226,65 @@ pub(crate) async fn select(
             _ = cancel.changed() => return Ok(Vec::new()),
         };
         if let Ok(Ok(Ok(frame))) = captured {
-            source.preview_png = thumbnail(&frame).ok();
+            source.width = frame.width;
+            source.height = frame.height;
+            sources[index].width = frame.width;
+            sources[index].height = frame.height;
+            if let Ok(preview) = thumbnail(&frame) {
+                if preview.len() <= 192 * 1024 && preview_bytes + preview.len() <= MAX_REQUEST / 2 {
+                    preview_bytes += preview.len();
+                    source.preview_png = Some(preview);
+                }
+            }
+        } else if source.kind == knave_portal_api::SourceKind::Window {
+            unavailable.push(source.id);
         }
     }
+    request
+        .sources
+        .retain(|source| !unavailable.contains(&source.id));
+    sources.retain(|source| !unavailable.contains(&source.id));
     let selected = invoke(&request, &mut cancel, Some(Duration::from_secs(120))).await?;
-    Ok(selected
+    let selected: Vec<_> = selected
         .iter()
         .filter_map(|id| sources.iter().find(|s| s.id == *id).cloned())
-        .collect())
+        .collect();
+    if selected.iter().any(|source: &SourceInfo| {
+        matches!(source.target, crate::types::CaptureTarget::Workspace { .. })
+    }) {
+        let mut allowed = 0;
+        let mut output = None;
+        for source in &selected {
+            let crate::types::CaptureTarget::Workspace {
+                output_id,
+                workspace,
+            } = source.target
+            else {
+                return Err("cannot mix workspace and other capture modes".into());
+            };
+            if output.is_some_and(|existing| existing != output_id) {
+                return Err("workspace sets require one output".into());
+            }
+            output = Some(output_id);
+            allowed |= 1 << (workspace - 1);
+        }
+        let mut source = selected[0].clone();
+        source.id = 0x7000_0000 | allowed;
+        source.target = crate::types::CaptureTarget::WorkspaceSet {
+            output_id: output.ok_or("no workspace output")?,
+            allowed,
+        };
+        source.name = format!(
+            "Workspaces {}",
+            (1..=32)
+                .filter(|workspace| allowed & (1 << (workspace - 1)) != 0)
+                .map(|workspace| workspace.to_string())
+                .collect::<Vec<_>>()
+                .join(", ")
+        );
+        return Ok(vec![source]);
+    }
+    Ok(selected)
 }
 pub(crate) fn thumbnail(frame: &ScreenshotData) -> Result<String, String> {
     if frame.width == 0

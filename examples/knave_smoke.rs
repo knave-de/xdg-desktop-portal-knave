@@ -32,6 +32,7 @@ async fn capture() -> anyhow::Result<()> {
     let (stop, _, tx, thread) = wayland.spawn_event_loop(Arc::clone(&pipewire));
     let (reply, result) = tokio::sync::oneshot::channel();
     tx.send(CaptureCommand::CaptureScreenshot {
+        target: xdg_desktop_portal_knave::types::CaptureTarget::Monitor,
         output_global_name: source.id,
         reply,
     })?;
@@ -171,7 +172,10 @@ async fn frontend(stop: bool, screenshot: bool) -> anyhow::Result<()> {
             .try_clone()?,
     )?)?;
     let mut options = HashMap::new();
-    options.insert("types".to_string(), OwnedValue::from(1u32));
+    let types =
+        std::env::var("KNAVE_SMOKE_SOURCE_TYPES").map_or(Ok(1), |value| value.parse::<u32>())?;
+    anyhow::ensure!((1..=3).contains(&types), "source types must be 1, 2 or 3");
+    options.insert("types".to_string(), OwnedValue::from(types));
     let handle: OwnedObjectPath = proxy.call("SelectSources", &(&session, options)).await?;
     response(&mut replies, &handle, 0).await?;
     let handle: OwnedObjectPath = proxy
@@ -205,21 +209,9 @@ async fn frontend(stop: bool, screenshot: bool) -> anyhow::Result<()> {
     }
     let fd: std::os::fd::OwnedFd = remote.into();
     let node = streams[0].0;
-    tokio::task::spawn_blocking(move || consume(node, fd)).await??;
+    consume_stream(node, fd, &streams[0].1).await?;
     if stop {
-        tokio::time::timeout(close_timeout()?, async {
-            while let Some(message) = closed.next().await {
-                if message?
-                    .header()
-                    .path()
-                    .is_some_and(|p| p.as_str() == session.as_str())
-                {
-                    return Ok::<_, anyhow::Error>(());
-                }
-            }
-            anyhow::bail!("session signal stream ended")
-        })
-        .await??;
+        wait_closed(&mut closed, &session).await?;
         println!("frontend session closed after sharing control ended");
         return Ok(());
     }
@@ -246,7 +238,7 @@ fn close_timeout() -> anyhow::Result<Duration> {
     Ok(Duration::from_secs(seconds))
 }
 
-fn consume(node: u32, fd: std::os::fd::OwnedFd) -> anyhow::Result<()> {
+fn consume(node: u32, fd: std::os::fd::OwnedFd, dimensions: (i32, i32)) -> anyhow::Result<()> {
     use pipewire::{self as pw, properties::properties, spa};
     use std::{cell::Cell, rc::Rc};
     pw::init();
@@ -254,6 +246,29 @@ fn consume(node: u32, fd: std::os::fd::OwnedFd) -> anyhow::Result<()> {
     let context = pw::context::ContextRc::new(&mainloop, None)?;
     let core = context.connect_fd_rc(fd, None)?;
     let count = Rc::new(Cell::new(0));
+    let samples = std::env::var_os("KNAVE_SMOKE_FRAME_DIR").map(std::path::PathBuf::from);
+    if let Some(path) = &samples {
+        std::fs::create_dir_all(path)?;
+    }
+    let capture_seconds = std::env::var("KNAVE_SMOKE_CAPTURE_SECONDS")
+        .ok()
+        .map(|value| value.parse::<u64>())
+        .transpose()?;
+    if let Some(seconds) = capture_seconds {
+        anyhow::ensure!(
+            (1..=60).contains(&seconds),
+            "capture seconds must be 1..=60"
+        );
+    }
+    anyhow::ensure!(
+        samples.is_none() || capture_seconds.is_some(),
+        "frame sampling requires a bounded capture duration"
+    );
+    let sample_error = Rc::new(std::cell::RefCell::new(None));
+    let write_error = Rc::clone(&sample_error);
+    let started = std::time::Instant::now();
+    let mut last_sample = None;
+    let mut sample_index = 0;
     let received = Rc::clone(&count);
     let done = mainloop.clone();
     let stream = pw::stream::StreamBox::new(
@@ -271,11 +286,21 @@ fn consume(node: u32, fd: std::os::fd::OwnedFd) -> anyhow::Result<()> {
             if let Some(mut buffer) = stream.dequeue_buffer() {
                 if let Some(data) = buffer.datas_mut().first_mut() {
                     let size = data.chunk().size() as usize;
+                    let offset = data.chunk().offset() as usize;
+                    let stride = data.chunk().stride();
                     if let Some(bytes) = data.data() {
-                        if size > 0 && size <= bytes.len() && bytes[..size].iter().any(|v| *v != 0)
+                        if size > 0 && offset.checked_add(size).is_some_and(|end| end<=bytes.len()) && bytes[offset..offset+size].iter().any(|v| *v != 0)
                         {
+                            if let Some(path) = &samples {
+                                if sample_index < 32 && last_sample.is_none_or(|last: std::time::Instant| last.elapsed() >= Duration::from_millis(500)) {
+                                    let result = std::fs::write(path.join(format!("frame-{sample_index:03}.bgrx")), &bytes[offset..offset+size])
+                                        .and_then(|()| std::fs::write(path.join(format!("frame-{sample_index:03}.json")), serde_json::json!({"width":dimensions.0,"height":dimensions.1,"stride":stride,"elapsed_ms":started.elapsed().as_millis()}).to_string()));
+                                    if let Err(error) = result { *write_error.borrow_mut()=Some(error.to_string()); done.quit(); }
+                                    sample_index+=1; last_sample=Some(std::time::Instant::now());
+                                }
+                            }
                             received.set(received.get() + 1);
-                            if received.get() >= 10 {
+                            if received.get() >= 10 && capture_seconds.is_none() {
                                 done.quit();
                             }
                         }
@@ -284,6 +309,37 @@ fn consume(node: u32, fd: std::os::fd::OwnedFd) -> anyhow::Result<()> {
             }
         })
         .register()?;
+    let values = bgrx_format()?;
+    stream.connect(
+        spa::utils::Direction::Input,
+        Some(node),
+        pw::stream::StreamFlags::AUTOCONNECT | pw::stream::StreamFlags::MAP_BUFFERS,
+        &mut [spa::pod::Pod::from_bytes(&values)
+            .ok_or_else(|| anyhow::anyhow!("invalid video format pod"))?],
+    )?;
+    let timeout = mainloop.clone();
+    let timer = mainloop.loop_().add_timer(move |_| timeout.quit());
+    timer
+        .update_timer(
+            Some(Duration::from_secs(capture_seconds.unwrap_or(10))),
+            None,
+        )
+        .into_result()?;
+    mainloop.run();
+    if let Some(error) = sample_error.borrow_mut().take() {
+        anyhow::bail!("frame sampling failed: {error}");
+    }
+    anyhow::ensure!(
+        count.get() >= 10,
+        "PipeWire consumer received only {} frames",
+        count.get()
+    );
+    println!("PipeWire consumer: {} nonempty video frames", count.get());
+    Ok(())
+}
+
+fn bgrx_format() -> anyhow::Result<Vec<u8>> {
+    use pipewire::spa;
     let object = spa::pod::Object {
         type_: spa::utils::SpaTypes::ObjectParamFormat.as_raw(),
         id: spa::param::ParamType::EnumFormat.as_raw(),
@@ -315,24 +371,40 @@ fn consume(node: u32, fd: std::os::fd::OwnedFd) -> anyhow::Result<()> {
     )?
     .0
     .into_inner();
-    stream.connect(
-        spa::utils::Direction::Input,
-        Some(node),
-        pw::stream::StreamFlags::AUTOCONNECT | pw::stream::StreamFlags::MAP_BUFFERS,
-        &mut [spa::pod::Pod::from_bytes(&values)
-            .ok_or_else(|| anyhow::anyhow!("invalid video format pod"))?],
+    Ok(values)
+}
+
+async fn consume_stream(
+    node: u32,
+    fd: std::os::fd::OwnedFd,
+    properties: &HashMap<String, OwnedValue>,
+) -> anyhow::Result<()> {
+    let dimensions = <(i32, i32)>::try_from(
+        properties
+            .get("size")
+            .ok_or_else(|| anyhow::anyhow!("missing stream size"))?
+            .try_clone()?,
     )?;
-    let timeout = mainloop.clone();
-    let timer = mainloop.loop_().add_timer(move |_| timeout.quit());
-    timer
-        .update_timer(Some(Duration::from_secs(10)), None)
-        .into_result()?;
-    mainloop.run();
-    anyhow::ensure!(
-        count.get() >= 10,
-        "PipeWire consumer received only {} frames",
-        count.get()
-    );
-    println!("PipeWire consumer: {} nonempty video frames", count.get());
+    tokio::task::spawn_blocking(move || consume(node, fd, dimensions)).await??;
+    Ok(())
+}
+
+async fn wait_closed(
+    closed: &mut zbus::MessageStream,
+    session: &ObjectPath<'_>,
+) -> anyhow::Result<()> {
+    tokio::time::timeout(close_timeout()?, async {
+        while let Some(message) = closed.next().await {
+            if message?
+                .header()
+                .path()
+                .is_some_and(|p| p.as_str() == session.as_str())
+            {
+                return Ok::<_, anyhow::Error>(());
+            }
+        }
+        anyhow::bail!("session signal stream ended")
+    })
+    .await??;
     Ok(())
 }

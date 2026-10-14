@@ -130,6 +130,7 @@ impl OutputInfo {
     /// Convert to a SourceInfo for the portal.
     pub fn to_source_info(&self) -> SourceInfo {
         SourceInfo {
+            target: crate::types::CaptureTarget::Monitor,
             id: self.global_name,
             name: self
                 .name
@@ -154,6 +155,8 @@ impl OutputInfo {
 /// their own Wayland connections.
 #[derive(Default)]
 pub struct WaylandState {
+    /// Optional selective capture managers and live foreign toplevels.
+    pub(crate) catalogue: super::capture_sources::SourceCatalogue,
     // === Input managers ===
     /// Virtual pointer manager (wlr protocol).
     pub pointer_manager: Option<ZwlrVirtualPointerManagerV1>,
@@ -202,7 +205,8 @@ pub struct WaylandState {
 impl WaylandState {
     /// Get all completed output infos as SourceInfo.
     pub fn get_sources(&self) -> Vec<SourceInfo> {
-        self.outputs
+        let mut sources: Vec<_> = self
+            .outputs
             .iter()
             .filter_map(|(_, info)| {
                 let info = info.lock().ok()?;
@@ -212,7 +216,11 @@ impl WaylandState {
                     None
                 }
             })
-            .collect()
+            .collect();
+        if let Some(monitor) = sources.first() {
+            sources.extend(self.catalogue.sources(monitor));
+        }
+        sources
     }
 
     /// Get all completed output infos as InputCapture zones.
