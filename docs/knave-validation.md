@@ -56,9 +56,32 @@ benchmark. GPU initialization has a substantial per-dialog cost with this driver
 
 ## Verification limits
 
-Manual native clicks in a desktop session, direct-TTY/login/reboot activation,
+### OBS buffer negotiation (2026-10-14)
+
+OBS 32.2.2 reproduced a PipeWire `error alloc buffers: Invalid argument`
+after source approval. The source advertised a fixed MemFd mask while OBS
+offered MemPtr/DmaBuf. Advertising MemFd/MemPtr as a SPA flags choice fixes
+the intersection without advertising unsupported DMA-BUF capture.
+
+With the corrected release backend, OBS negotiated BGRx at 1920x1080/30,
+entered streaming and displayed a live recursive desktop preview on a private
+D-Bus/PipeWire/WirePlumber session in the Winit harness. Native Stop sharing
+closed the session and destroyed the capture node. The existing smoke consumer
+also received ten nonempty frames through the frontend's restricted fd.
+The demonstration is
+`knave/build/desktop-harness/obs-buffers/obs-working.mp4` in the sibling workspace.
+All-feature workspace tests, release build, formatting and warnings-denied
+rustdoc passed. Runtime-library/binary strict Clippy passed; all-target checks
+remain blocked by existing test lints in unrelated modules on Clippy 1.99.
+The installed backend was updated and restarted, but physical-session OBS
+capture still needs a user retry. This check does not cover sandboxed OBS,
+hardware GPU capture or browser sharing.
+
+### Remaining coverage
+
+Manual native clicks in a physical desktop session, direct-TTY/login/reboot activation,
 multiple physical outputs, transformed/scaled physical outputs, window contents
-changing over time, OBS/browser and sandbox application workflows remain unverified.
+changing over time on physical outputs, browser and sandbox application workflows remain unverified.
 Window sharing, RemoteDesktop/InputCapture, cursor metadata, DMA-BUF capture and
 native color picking remain deferred. Resolution changes require restarting the backend and recreating the session;
 live PipeWire format renegotiation is not implemented. The standard capture globals
