@@ -157,11 +157,15 @@ pub struct ActiveExtCapture {
     /// "now" on every issued request; consulted by
     /// `request_next_frame`/`pump_paced_requests` to pace the capture loop.
     next_request_due: Instant,
+    /// Fixed PipeWire canvas; screenshots negotiate their own dimensions.
+    expected_canvas: Option<(u32, u32)>,
 }
 
 /// Central ext-image-copy-capture state, stored in WaylandState.
 #[derive(Default)]
 pub struct ExtCaptureState {
+    /// Failed streaming nodes, drained by the owner into the shared lifecycle queue.
+    pub failed_nodes: Vec<u32>,
     /// The capture manager global.
     pub manager: Option<ExtImageCopyCaptureManagerV1>,
     /// The output source manager global.
@@ -197,6 +201,19 @@ pub struct ExtCaptureState {
 }
 
 impl ExtCaptureState {
+    pub(crate) fn expect_canvas(&mut self, node_id: u32, width: u32, height: u32) {
+        if let Some(capture) = self.captures.get_mut(&node_id) {
+            capture.expected_canvas = Some((width, height));
+        }
+    }
+
+    /// Queue one bounded stream failure for portal-session cleanup.
+    pub(crate) fn mark_failed(&mut self, node_id: u32) {
+        if self.failed_nodes.len() < 8 && !self.failed_nodes.contains(&node_id) {
+            self.failed_nodes.push(node_id);
+        }
+    }
+
     /// Set the minimum interval between capture requests. Zero disables
     /// pacing (default). Call before the event loop starts processing
     /// frames for this to take effect from the first paced request.
@@ -215,6 +232,7 @@ impl ExtCaptureState {
         output_global_name: u32,
         node_id: u32,
         paint_cursors: bool,
+        image_source: Option<ExtImageCaptureSourceV1>,
     ) {
         let Some(source_manager) = &self.source_manager else {
             tracing::error!("Cannot start ext capture: source manager not bound");
@@ -239,7 +257,8 @@ impl ExtCaptureState {
             output = output_global_name,
             "ext capture: → source_manager.create_source(output)"
         );
-        let source = source_manager.create_source(&output, qh, node_id);
+        let source =
+            image_source.unwrap_or_else(|| source_manager.create_source(&output, qh, node_id));
 
         // Create a capture session from the source.
         let options = if paint_cursors {
@@ -271,6 +290,7 @@ impl ExtCaptureState {
             timeout_reported: false,
             capture_started: None,
             next_request_due: Instant::now() + self.min_frame_interval,
+            expected_canvas: None,
         };
 
         self.captures.insert(node_id, capture);
@@ -283,6 +303,7 @@ impl ExtCaptureState {
         output: WlOutput,
         output_global_name: u32,
         reply: tokio::sync::oneshot::Sender<std::result::Result<ScreenshotData, String>>,
+        image_source: Option<ExtImageCaptureSourceV1>,
     ) {
         let Some(source_manager) = &self.source_manager else {
             let _ = reply.send(Err("ext source manager not bound".to_string()));
@@ -302,7 +323,8 @@ impl ExtCaptureState {
             "Starting ext one-shot screenshot capture"
         );
 
-        let source = source_manager.create_source(&output, qh, screenshot_id);
+        let source = image_source
+            .unwrap_or_else(|| source_manager.create_source(&output, qh, screenshot_id));
         let options = ext_image_copy_capture_manager_v1::Options::PaintCursors;
         let session = manager.create_session(&source, options, qh, screenshot_id);
 
@@ -322,6 +344,7 @@ impl ExtCaptureState {
             timeout_reported: false,
             capture_started: None,
             next_request_due: Instant::now(),
+            expected_canvas: None,
         };
 
         self.captures.insert(screenshot_id, capture);
@@ -364,6 +387,19 @@ impl ExtCaptureState {
     /// All buffer constraints have been sent. Allocate a SHM buffer
     /// matching the constraints and request the first frame.
     pub fn on_session_done(&mut self, node_id: u32, qh: &QueueHandle<WaylandState>) {
+        if self.captures.get(&node_id).is_some_and(|capture| {
+            capture.expected_canvas.is_some_and(|expected| {
+                expected != (capture.constraints.width, capture.constraints.height)
+            })
+        }) {
+            tracing::warn!(
+                node_id,
+                "capture canvas changed before stream negotiation; stopping session"
+            );
+            self.mark_failed(node_id);
+            self.stop_capture(node_id);
+            return;
+        }
         if let Some(capture) = self.captures.get_mut(&node_id) {
             capture.constraints.done = true;
             tracing::debug!(
@@ -385,6 +421,9 @@ impl ExtCaptureState {
     pub fn on_session_stopped(&mut self, node_id: u32) {
         if let Some(capture) = self.captures.get_mut(&node_id) {
             capture.stopped = true;
+            if capture.screenshot_reply.is_none() && self.failed_nodes.len() < 8 {
+                self.failed_nodes.push(node_id);
+            }
             tracing::warn!(node_id, "ext capture session stopped by compositor");
 
             // For screenshots, send error
@@ -697,6 +736,13 @@ impl ExtCaptureState {
                 );
                 capture.timeout_reported = true;
                 timed_out.push(capture.node_id);
+
+                if capture.screenshot_reply.is_none()
+                    && self.failed_nodes.len() < 8
+                    && !self.failed_nodes.contains(&capture.node_id)
+                {
+                    self.failed_nodes.push(capture.node_id);
+                }
 
                 // For screenshots, send error immediately
                 if let Some(reply) = capture.screenshot_reply.take() {

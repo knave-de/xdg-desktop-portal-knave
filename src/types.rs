@@ -7,8 +7,10 @@
 use std::collections::HashMap;
 
 /// Information about a capturable source (monitor or window).
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SourceInfo {
+    /// Exact compositor capture target. Selective sources never fall back to outputs.
+    pub target: CaptureTarget,
     /// Unique identifier for this source.
     pub id: u32,
     /// Human-readable name (e.g., "eDP-1").
@@ -29,6 +31,33 @@ pub struct SourceInfo {
     pub scale: i32,
     /// Source type.
     pub source_type: SourceType,
+}
+
+/// Immutable source identity within one compositor connection.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum CaptureTarget {
+    /// Standard output capture, using SourceInfo.id as the output global.
+    #[default]
+    Monitor,
+    /// Standard foreign-toplevel source, identified by this connection's catalogue.
+    Window {
+        /// Monotonic connection-local toplevel catalogue identity.
+        handle_id: u32,
+    },
+    /// A selectable workspace; the picker combines these into one set.
+    Workspace {
+        /// Actual wl_output global backing this workspace.
+        output_id: u32,
+        /// One-based workspace number.
+        workspace: u32,
+    },
+    /// One output stream with an immutable allowed-workspace mask.
+    WorkspaceSet {
+        /// Actual wl_output global backing this set.
+        output_id: u32,
+        /// Immutable bitmask; bit zero is workspace 1.
+        allowed: u32,
+    },
 }
 
 /// Type of capturable source.

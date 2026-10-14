@@ -10,6 +10,8 @@
 /// during the initial Wayland registry roundtrip.
 #[derive(Debug, Default, Clone)]
 pub struct AvailableProtocols {
+    /// Standard window source manager and foreign-toplevel list are both bound.
+    pub ext_foreign_toplevel_capture: bool,
     // === Screen Capture ===
     /// ext-image-copy-capture-v1 (preferred, staging standard).
     pub ext_image_copy_capture: bool,

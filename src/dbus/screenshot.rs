@@ -89,6 +89,7 @@ impl ScreenshotInterface {
 
         self.capture_tx
             .send(CaptureCommand::CaptureScreenshot {
+                target: crate::types::CaptureTarget::Monitor,
                 output_global_name: output_id,
                 reply: reply_tx,
             })

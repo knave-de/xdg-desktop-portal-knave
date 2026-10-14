@@ -221,6 +221,18 @@ impl SessionManager {
         }
     }
 
+    /// Stop only sessions owning failed compositor sources; the sharing task reaps
+    /// its UI, emits Closed, and releases Wayland and PipeWire resources.
+    pub(crate) fn stop_failed_capture_nodes(&self, nodes: &[u32]) {
+        for session in self.sessions.values() {
+            if session.stream_ids().iter().any(|id| nodes.contains(id)) {
+                if let Some(stop) = &session.sharing_stop {
+                    let _ = stop.send(true);
+                }
+            }
+        }
+    }
+
     /// Close all sessions for an application.
     ///
     /// Returns a list of closed sessions for resource cleanup.

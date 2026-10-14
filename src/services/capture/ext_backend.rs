@@ -1,7 +1,7 @@
 //! ext-image-copy-capture-v1 capture backend.
 //!
 //! Uses the staging standard `ext_image_copy_capture_manager_v1` protocol
-//! for screen capture. Enumerates sources from wl_output globals.
+//! for output, window and allowed-workspace capture.
 
 use std::{
     collections::HashMap,
@@ -21,11 +21,12 @@ use crate::{
 /// Uses `ext_image_copy_capture_manager_v1` + `ext_output_image_capture_source_manager_v1`
 /// to capture output frames and feed them to PipeWire streams.
 ///
-/// **Note:** The ext protocol is not yet wired for frame delivery — this backend
-/// currently falls through to PipeWire stream creation only. Once
-/// ext-image-copy-capture Dispatch impls are added, this will start real capture.
+/// Selective targets use their own image sources; missing sources never fall back
+/// to output capture.
 pub struct ExtCaptureBackend {
-    /// Known sources from wl_output globals.
+    /// Capability remains available even when there are no open windows.
+    pub(crate) windows_supported: bool,
+    /// Known output, window and workspace sources.
     sources: Vec<SourceInfo>,
     /// Active streams by stream ID (PipeWire node ID).
     active_streams: HashMap<u32, StreamInfo>,
@@ -43,11 +44,33 @@ impl ExtCaptureBackend {
         capture_tx: mpsc::Sender<CaptureCommand>,
     ) -> Self {
         Self {
+            windows_supported: false,
             sources,
             active_streams: HashMap::new(),
             pipewire,
             capture_tx,
         }
+    }
+}
+
+fn valid_source(available: &[SourceInfo], source: &SourceInfo) -> bool {
+    if let crate::types::CaptureTarget::WorkspaceSet { output_id, allowed } = source.target {
+        let known = available
+            .iter()
+            .fold(0, |mask, source| match source.target {
+                crate::types::CaptureTarget::Workspace {
+                    output_id: output,
+                    workspace,
+                } if output == output_id && (1..=32).contains(&workspace) => {
+                    mask | (1 << (workspace - 1))
+                }
+                _ => mask,
+            });
+        allowed != 0 && allowed & !known == 0 && source.source_type == SourceType::Monitor
+    } else {
+        available
+            .iter()
+            .any(|candidate| candidate.id == source.id && candidate.target == source.target)
     }
 }
 
@@ -80,7 +103,7 @@ impl CaptureBackend for ExtCaptureBackend {
             ));
         }
         for source in sources {
-            if !self.sources.iter().any(|s| s.id == source.id) {
+            if !valid_source(&self.sources, source) {
                 return Err(PortalError::SourceNotFound(source.id));
             }
         }
@@ -88,7 +111,7 @@ impl CaptureBackend for ExtCaptureBackend {
         let result = (|| {
             for source in sources {
                 // Verify source exists
-                if !self.sources.iter().any(|s| s.id == source.id) {
+                if !valid_source(&self.sources, source) {
                     return Err(PortalError::SourceNotFound(source.id));
                 }
 
@@ -129,7 +152,11 @@ impl CaptureBackend for ExtCaptureBackend {
                     position: (source.x, source.y),
                     size: (source.width, source.height),
                     source_type: source.source_type,
-                    mapping_id: Some(format!("output:{}", source.name)),
+                    mapping_id: if source.target == crate::types::CaptureTarget::Monitor {
+                        Some(format!("output:{}", source.name))
+                    } else {
+                        None
+                    },
                     scale: source.scale,
                     properties: HashMap::new(),
                 };
@@ -145,6 +172,7 @@ impl CaptureBackend for ExtCaptureBackend {
                 // Start frame capture via the Wayland event loop.
                 // The event loop dispatches the negotiated capture protocol.
                 if let Err(e) = self.capture_tx.send(CaptureCommand::StartCapture {
+                    target: source.target,
                     output_global_name: source.id,
                     node_id,
                     width: source.width,
@@ -206,6 +234,11 @@ impl CaptureBackend for ExtCaptureBackend {
 
     fn available_source_types(&self) -> u32 {
         SourceType::Monitor.to_bits()
+            | if self.windows_supported {
+                SourceType::Window.to_bits()
+            } else {
+                0
+            }
     }
 
     fn available_cursor_modes(&self) -> u32 {
@@ -227,6 +260,57 @@ impl CaptureBackend for ExtCaptureBackend {
 mod tests {
     use super::*;
 
+    #[test]
+    fn workspace_groups_require_every_bit_on_the_same_output() {
+        use crate::types::CaptureTarget;
+        let base = SourceInfo {
+            target: CaptureTarget::Workspace {
+                output_id: 1,
+                workspace: 1,
+            },
+            id: 11,
+            name: "Workspace 1".into(),
+            description: String::new(),
+            width: 800,
+            height: 600,
+            refresh_rate: 60000,
+            x: 0,
+            y: 0,
+            scale: 1,
+            source_type: SourceType::Monitor,
+        };
+        let mut ninth = base.clone();
+        ninth.id = 19;
+        ninth.target = CaptureTarget::Workspace {
+            output_id: 1,
+            workspace: 9,
+        };
+        let available = [base.clone(), ninth];
+        let mut group = base;
+        group.target = CaptureTarget::WorkspaceSet {
+            output_id: 1,
+            allowed: 0x101,
+        };
+        assert!(valid_source(&available, &group));
+        group.target = CaptureTarget::WorkspaceSet {
+            output_id: 2,
+            allowed: 0x101,
+        };
+        assert!(!valid_source(&available, &group));
+        group.target = CaptureTarget::WorkspaceSet {
+            output_id: 1,
+            allowed: 0x103,
+        };
+        assert!(!valid_source(&available, &group));
+        group.target = CaptureTarget::WorkspaceSet {
+            output_id: 1,
+            allowed: 0,
+        };
+        assert!(!valid_source(&available, &group));
+        group.target = CaptureTarget::Window { handle_id: 11 };
+        assert!(!valid_source(&available, &group));
+    }
+
     // Note: PipeWireManager requires a running PipeWire daemon.
     // Tests that need real PipeWire streams are integration tests.
     // Unit tests here verify source filtering and protocol type.
@@ -243,6 +327,7 @@ mod tests {
     #[test]
     fn test_source_filtering() {
         let sources = [SourceInfo {
+            target: crate::types::CaptureTarget::Monitor,
             id: 1,
             name: "eDP-1".to_string(),
             description: "Built-in Display".to_string(),

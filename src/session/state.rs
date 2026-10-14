@@ -505,6 +505,7 @@ mod tests {
         let mut session2 = test_session();
         session2
             .select_sources(vec![crate::types::SourceInfo {
+                target: crate::types::CaptureTarget::Monitor,
                 id: 1,
                 name: "Test".to_string(),
                 description: "Test output".to_string(),

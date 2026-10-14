@@ -82,8 +82,57 @@ hardware GPU capture or browser sharing.
 Manual native clicks in a physical desktop session, direct-TTY/login/reboot activation,
 multiple physical outputs, transformed/scaled physical outputs, window contents
 changing over time on physical outputs, browser and sandbox application workflows remain unverified.
-Window sharing, RemoteDesktop/InputCapture, cursor metadata, DMA-BUF capture and
+RemoteDesktop/InputCapture, cursor metadata, DMA-BUF capture and
 native color picking remain deferred. Resolution changes require restarting the backend and recreating the session;
 live PipeWire format renegotiation is not implemented. The standard capture globals
 use Villain's existing trusted Wayland client boundary; security-context filtering
 is not introduced here.
+
+### Selective sharing (2026-10-14)
+
+Nested 1280×800 Winit tests used native pointer consent and real frames through
+the frontend's restricted PipeWire fd. The selector responds to the first click
+when the pointer already lies over a newly mapped surface. Window lists scroll
+while Cancel remains visible. Application source-type restrictions disable
+unavailable tabs. Noncontiguous sets 1, 3, 9 and schema set 1, 2, 3, 9 were checked.
+
+Distinct red/green/blue allowed windows and a private magenta workspace prove
+allowed switches follow live content, excluded switches repeat the whole last
+allowed frame byte-for-byte, and excluded startup produces black until allowed
+content is visited. A selected window remained isolated while maximally covered,
+off workspace and resized into its original canvas. No private magenta pixels
+appeared in window samples. Confirmed window destruction delivered Session.Closed
+and removed its capture/PipeWire node and control. Invalid masks 0 and 1024 were
+rejected on separate live connections without crashing Villain. A resize between
+preview and stream startup closed the session and destroyed its node instead of
+leaving a broken stream/control active; a fresh selection is required in that race.
+
+OBS 32.2.2 selected an off-workspace green window while the sender displayed the
+private magenta workspace. It negotiated BGRx 1280×764 at 30 fps, entered streaming
+and showed the approved green content. Native Stop ended capture. Installed
+backend and Shell were exercised with `scripts/sharing-fixture.py --installed`.
+The installed compositor matches the nested compositor binary; the physical
+session requires a restart to load its new capture globals.
+
+Three-second software-rendered resource samples included desktop recording:
+
+| Process | Idle | Allowed capture | Excluded/frozen | After close |
+|---|---|---|---|---|
+| Backend CPU / RSS | 0% / 26.8 MiB | 5.7% / 46.8 MiB | 11% / 46.8 MiB | 0.3% / 21.9 MiB |
+| Villain CPU / RSS | 0% / 195.3 MiB | 59.3% / 219.1 MiB | 3.3% / 203.9 MiB | 3.7% / 135.7 MiB |
+
+The sharing control sampled 0% CPU, 24 threads and 17 fds during allowed/frozen
+capture. Backend fds returned from 39 to 28 and threads from 8 to 7 after close;
+Villain fds returned below baseline after closing the private OBS application.
+These are short local samples with software rendering, not sustained maximum
+concurrency or hardware GPU benchmarks. Frozen capture avoids GPU readback but
+continues bounded frame delivery for existing consumers.
+
+MP4s and assertions are in sibling Knave's `build/desktop-harness/selective-final`:
+`window-isolation-complete.mp4`, `workspace-black-resume-freeze.mp4`,
+`workspace-selected-set.mp4`, `obs-window-demo.mp4`, and corresponding result JSONs.
+All-feature tests, all four isolated compositor integration tests, release builds
+and modified runtime/example strict Clippy pass.
+Full all-target Clippy remains blocked by inherited test lints on Clippy 1.99.
+Direct-TTY, hardware GPUs, physical monitor transforms, browser/sandbox clients
+and multiple-monitor selection remain outside this verification.

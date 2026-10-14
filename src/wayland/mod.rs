@@ -13,6 +13,7 @@
 //! - Provides access to bound protocol objects
 //! - Integrates with tokio via `AsyncFd` for event dispatch
 
+mod capture_sources;
 pub mod dispatch;
 pub mod ext_capture;
 pub mod globals;
@@ -90,6 +91,8 @@ impl std::fmt::Debug for ScreenshotData {
 pub enum CaptureCommand {
     /// Start capturing frames from an output into a PipeWire stream.
     StartCapture {
+        /// Immutable selective source, or the standard monitor target.
+        target: crate::types::CaptureTarget,
         /// wl_output global name identifying the output.
         output_global_name: u32,
         /// PipeWire node ID of the stream to deliver frames to.
@@ -108,6 +111,8 @@ pub enum CaptureCommand {
     },
     /// Capture a single screenshot frame (one-shot, no PipeWire stream).
     CaptureScreenshot {
+        /// Exact source for a consent preview.
+        target: crate::types::CaptureTarget,
         /// wl_output global name identifying the output.
         output_global_name: u32,
         /// Reply channel for the captured frame data.
@@ -223,6 +228,10 @@ pub struct WaylandConnection {
 /// Backends read this to get current output info, etc.
 #[derive(Debug, Default)]
 pub struct SharedWaylandState {
+    /// Wake the existing catalogue/lifecycle task only when relevant state changes.
+    pub changed: Arc<tokio::sync::Notify>,
+    /// Bounded failed capture nodes awaiting session teardown.
+    pub failed_nodes: Vec<u32>,
     /// Current output sources (updated after each dispatch).
     pub sources: Vec<crate::types::SourceInfo>,
     /// Current InputCapture zones (updated after each dispatch).
@@ -282,6 +291,8 @@ impl WaylandConnection {
 
         // Build initial shared state
         let shared_state = Arc::new(Mutex::new(SharedWaylandState {
+            changed: Arc::default(),
+            failed_nodes: Vec::new(),
             sources: state.get_sources(),
             zones: state.get_input_capture_zones(),
             zone_set: 0,
@@ -483,6 +494,9 @@ impl WaylandConnection {
             }
         }
 
+        state.catalogue.bind(globals, qh);
+        protocols.ext_foreign_toplevel_capture =
+            state.catalogue.windows_manager.is_some() && state.catalogue.list.is_some();
         // === ext-image-copy-capture (preferred capture protocol) ===
         match globals.bind::<ExtOutputImageCaptureSourceManagerV1, _, _>(qh, 1..=1, ()) {
             Ok(manager) => {
@@ -700,7 +714,18 @@ impl WaylandConnection {
     /// Update the shared state from the local state.
     fn update_shared_state(&mut self) {
         if let Ok(mut shared) = self.shared_state.lock() {
-            shared.sources = self.state.get_sources();
+            let sources = self.state.get_sources();
+            let changed =
+                sources != shared.sources || !self.state.ext_capture.failed_nodes.is_empty();
+            shared.sources = sources;
+            for node in self.state.ext_capture.failed_nodes.drain(..) {
+                if shared.failed_nodes.len() < 8 && !shared.failed_nodes.contains(&node) {
+                    shared.failed_nodes.push(node);
+                }
+            }
+            if changed {
+                shared.changed.notify_one();
+            }
 
             let new_zones = self.state.get_input_capture_zones();
             if new_zones != shared.zones {
@@ -906,46 +931,119 @@ impl WaylandConnection {
     ///
     /// Routes to ext-image-copy-capture when available, falling back to
     /// wlr-screencopy.
+    fn source_output(&self, id: u32, target: crate::types::CaptureTarget) -> Option<WlOutput> {
+        use crate::types::CaptureTarget;
+        match target {
+            CaptureTarget::Monitor => self.find_output(id),
+            CaptureTarget::Window { .. } => self.state.outputs.first().map(|entry| entry.0.clone()),
+            CaptureTarget::Workspace { output_id, .. }
+            | CaptureTarget::WorkspaceSet { output_id, .. } => self.find_output(output_id),
+        }
+    }
+    fn capture_screenshot(
+        &mut self,
+        output_global_name: u32,
+        target: crate::types::CaptureTarget,
+        reply: tokio::sync::oneshot::Sender<std::result::Result<ScreenshotData, String>>,
+        use_ext: bool,
+    ) {
+        use crate::types::CaptureTarget;
+        let Some(output) = self.source_output(output_global_name, target) else {
+            let _ = reply.send(Err("selected source unavailable".into()));
+            return;
+        };
+        let image_source = if target == CaptureTarget::Monitor {
+            None
+        } else {
+            if !use_ext {
+                let _ = reply.send(Err("selective capture unavailable".into()));
+                return;
+            }
+            match self
+                .state
+                .catalogue
+                .create_source(&self.queue_handle, target, &output, 0)
+            {
+                Ok(source) => Some(source),
+                Err(error) => {
+                    let _ = reply.send(Err(error));
+                    return;
+                }
+            }
+        };
+        if use_ext {
+            self.state.ext_capture.start_screenshot(
+                &self.queue_handle,
+                output,
+                output_global_name,
+                reply,
+                image_source,
+            );
+        } else {
+            self.state.screencopy.start_screenshot(
+                &self.queue_handle,
+                output,
+                output_global_name,
+                reply,
+            );
+        }
+    }
     fn process_capture_commands(&mut self, capture_rx: &mpsc::Receiver<CaptureCommand>) {
+        use crate::types::CaptureTarget;
         let use_ext = self.has_ext_capture() && !self.force_wlr_screencopy;
-
         while let Ok(cmd) = capture_rx.try_recv() {
             match cmd {
                 CaptureCommand::StartCapture {
                     output_global_name,
+                    target,
                     node_id,
-                    width: _,
-                    height: _,
                     cursor_mode,
+                    width,
+                    height,
                 } => {
-                    let output = self.find_output(output_global_name);
-                    match output {
-                        Some(output) => {
-                            if use_ext {
-                                let paint_cursors = matches!(cursor_mode, CursorMode::Embedded);
-                                self.state.ext_capture.start_capture(
-                                    &self.queue_handle,
-                                    output,
-                                    output_global_name,
-                                    node_id,
-                                    paint_cursors,
-                                );
-                            } else {
-                                self.state.screencopy.start_capture(
-                                    &self.queue_handle,
-                                    output,
-                                    output_global_name,
-                                    node_id,
-                                    cursor_mode,
-                                );
+                    let Some(output) = self.source_output(output_global_name, target) else {
+                        self.state.ext_capture.mark_failed(node_id);
+                        continue;
+                    };
+                    let image_source = if target == CaptureTarget::Monitor {
+                        None
+                    } else {
+                        if !use_ext {
+                            self.state.ext_capture.mark_failed(node_id);
+                            continue;
+                        }
+                        match self.state.catalogue.create_source(
+                            &self.queue_handle,
+                            target,
+                            &output,
+                            node_id,
+                        ) {
+                            Ok(source) => Some(source),
+                            Err(error) => {
+                                tracing::warn!(%error,"selective capture source disappeared");
+                                self.state.ext_capture.mark_failed(node_id);
+                                continue;
                             }
                         }
-                        None => {
-                            tracing::error!(
-                                output_global_name,
-                                "Cannot start capture: output not found"
-                            );
-                        }
+                    };
+                    if use_ext {
+                        self.state.ext_capture.start_capture(
+                            &self.queue_handle,
+                            output,
+                            output_global_name,
+                            node_id,
+                            matches!(cursor_mode, CursorMode::Embedded),
+                            image_source,
+                        );
+                        self.state.ext_capture.expect_canvas(node_id, width, height);
+                    } else {
+                        self.state.screencopy.start_capture(
+                            &self.queue_handle,
+                            output,
+                            output_global_name,
+                            node_id,
+                            cursor_mode,
+                        );
                     }
                 }
                 CaptureCommand::StopCapture { node_id } => {
@@ -957,32 +1055,10 @@ impl WaylandConnection {
                 }
                 CaptureCommand::CaptureScreenshot {
                     output_global_name,
+                    target,
                     reply,
                 } => {
-                    let output = self.find_output(output_global_name);
-                    match output {
-                        Some(output) => {
-                            if use_ext {
-                                self.state.ext_capture.start_screenshot(
-                                    &self.queue_handle,
-                                    output,
-                                    output_global_name,
-                                    reply,
-                                );
-                            } else {
-                                self.state.screencopy.start_screenshot(
-                                    &self.queue_handle,
-                                    output,
-                                    output_global_name,
-                                    reply,
-                                );
-                            }
-                        }
-                        None => {
-                            let _ =
-                                reply.send(Err(format!("Output not found: {output_global_name}")));
-                        }
-                    }
+                    self.capture_screenshot(output_global_name, target, reply, use_ext);
                 }
             }
         }
