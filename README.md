@@ -222,6 +222,12 @@ Never run an automatic-selection fixture on the normal user session. Build debug
 frontend sessions and resource snapshots. `--render` captures the native dialog;
 `--native` requires manual source selection. `--release` uses release builds.
 Native clicks, direct-TTY login, OBS/browser and sandbox apps need separate checks.
+For a direct ScreenCast UI check on a private bus, run the `knave_smoke share`
+example mode: it skips the unrelated screenshot request, consumes ten video frames,
+and waits for Stop sharing to close the session. Source approval must be performed
+through the native UI; do not use an automatic-selection override on a user session.
+For a manual check, set `KNAVE_SMOKE_CLOSE_TIMEOUT=300` to allow five minutes for
+Stop sharing (default 10 seconds; valid range 1–600).
 See [the validation record](docs/knave-validation.md) for measured results and limits.
 
 ## Compositor Compatibility
