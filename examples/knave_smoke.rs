@@ -10,11 +10,12 @@ use zbus::zvariant::{ObjectPath, OwnedObjectPath, OwnedValue};
 async fn main() -> anyhow::Result<()> {
     match std::env::args().nth(1).as_deref() {
         Some("capture") => capture().await,
-        Some("frontend") => frontend(false).await,
-        Some("stop") => frontend(true).await,
+        Some("frontend") => frontend(false, true).await,
+        Some("stop") => frontend(true, true).await,
+        Some("share") => frontend(true, false).await,
         Some("native") => frontend_screenshot(false).await,
         Some("cancel") => frontend_screenshot(true).await,
-        _ => anyhow::bail!("usage: knave_smoke capture|frontend|native"),
+        _ => anyhow::bail!("usage: knave_smoke capture|frontend|stop|share|native|cancel"),
     }
 }
 async fn capture() -> anyhow::Result<()> {
@@ -135,8 +136,10 @@ async fn frontend_screenshot(cancel: bool) -> anyhow::Result<()> {
     println!("frontend screenshot: {uri}");
     Ok(())
 }
-async fn frontend(stop: bool) -> anyhow::Result<()> {
-    frontend_screenshot(false).await?;
+async fn frontend(stop: bool, screenshot: bool) -> anyhow::Result<()> {
+    if screenshot {
+        frontend_screenshot(false).await?;
+    }
     let conn = zbus::Connection::session().await?;
     let proxy = zbus::Proxy::new(
         &conn,
@@ -204,7 +207,7 @@ async fn frontend(stop: bool) -> anyhow::Result<()> {
     let node = streams[0].0;
     tokio::task::spawn_blocking(move || consume(node, fd)).await??;
     if stop {
-        tokio::time::timeout(Duration::from_secs(10), async {
+        tokio::time::timeout(close_timeout()?, async {
             while let Some(message) = closed.next().await {
                 if message?
                     .header()
@@ -217,7 +220,7 @@ async fn frontend(stop: bool) -> anyhow::Result<()> {
             anyhow::bail!("session signal stream ended")
         })
         .await??;
-        println!("frontend session closed after sharing control failure");
+        println!("frontend session closed after sharing control ended");
         return Ok(());
     }
     let close = zbus::Proxy::new(
@@ -231,6 +234,16 @@ async fn frontend(stop: bool) -> anyhow::Result<()> {
     tokio::time::sleep(Duration::from_millis(250)).await;
     println!("frontend session closed");
     Ok(())
+}
+
+fn close_timeout() -> anyhow::Result<Duration> {
+    let seconds =
+        std::env::var("KNAVE_SMOKE_CLOSE_TIMEOUT").map_or(Ok(10), |value| value.parse::<u64>())?;
+    anyhow::ensure!(
+        (1..=600).contains(&seconds),
+        "close timeout must be 1..=600 seconds"
+    );
+    Ok(Duration::from_secs(seconds))
 }
 
 fn consume(node: u32, fd: std::os::fd::OwnedFd) -> anyhow::Result<()> {

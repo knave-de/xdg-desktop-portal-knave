@@ -250,14 +250,28 @@ impl PipeWireVideoStream {
             (libspa::sys::SPA_PARAM_BUFFERS_stride, stride),
             (
                 libspa::sys::SPA_PARAM_BUFFERS_dataType,
-                1 << libspa::sys::SPA_DATA_MemFd,
+                // OBS requests MemPtr for CPU frames. PipeWire maps shared
+                // memory across clients; both types use our mapped copy path.
+                (1 << libspa::sys::SPA_DATA_MemFd) | (1 << libspa::sys::SPA_DATA_MemPtr),
             ),
         ]
         .into_iter()
         .map(|(key, value)| Property {
             key,
             flags: PropertyFlags::empty(),
-            value: Value::Int(value),
+            value: if key == libspa::sys::SPA_PARAM_BUFFERS_dataType {
+                // A flags choice intersects consumer masks; an Int requires
+                // equality and rejects OBS's MemPtr | DmaBuf offer.
+                Value::Choice(libspa::pod::ChoiceValue::Int(libspa::utils::Choice(
+                    libspa::utils::ChoiceFlags::empty(),
+                    libspa::utils::ChoiceEnum::Flags {
+                        default: value,
+                        flags: vec![value],
+                    },
+                )))
+            } else {
+                Value::Int(value)
+            },
         })
         .collect();
         PodSerializer::serialize(
@@ -413,5 +427,34 @@ mod tests {
         let bytes = pod.unwrap();
         // The pod should have some reasonable size (header + properties)
         assert!(bytes.len() > 32);
+    }
+
+    #[test]
+    fn capture_buffers_support_obs_cpu_memory_without_dmabuf() {
+        use libspa::pod::{Value, deserialize::PodDeserializer};
+
+        let bytes = PipeWireVideoStream::build_buffers_pod(1920, 1080).unwrap();
+        let (_, Value::Object(object)) = PodDeserializer::deserialize_any_from(&bytes).unwrap()
+        else {
+            panic!("expected buffer parameter object");
+        };
+        let property = object
+            .properties
+            .iter()
+            .find(|property| property.key == libspa::sys::SPA_PARAM_BUFFERS_dataType)
+            .unwrap();
+        let Value::Choice(libspa::pod::ChoiceValue::Int(libspa::utils::Choice(
+            _,
+            libspa::utils::ChoiceEnum::Flags {
+                default: supported, ..
+            },
+        ))) = property.value
+        else {
+            panic!("memory types must negotiate as a flags choice");
+        };
+        // OBS's CPU/GPU offer must intersect our CPU-only capabilities.
+        let obs_offer = (1 << libspa::sys::SPA_DATA_MemPtr) | (1 << libspa::sys::SPA_DATA_DmaBuf);
+        assert_eq!(supported & obs_offer, 1 << libspa::sys::SPA_DATA_MemPtr);
+        assert_ne!(supported & (1 << libspa::sys::SPA_DATA_MemFd), 0);
     }
 }
