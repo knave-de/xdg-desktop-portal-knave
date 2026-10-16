@@ -4,7 +4,7 @@ use crate::{
     wayland::{CaptureCommand, ScreenshotData},
 };
 use base64::{Engine, engine::general_purpose::STANDARD};
-use knave_portal_api::{MAX_REQUEST, MAX_SOURCES, Operation, Reply, Request, Source, VERSION};
+use knave_portal_api::{MAX_REQUEST, MAX_SOURCES, Operation, Reply, Request, Source};
 use std::{
     process::Stdio,
     sync::{Arc, mpsc},
@@ -32,7 +32,6 @@ pub(crate) fn request(
     sources: &[SourceInfo],
 ) -> Request {
     Request {
-        version: VERSION,
         request_id: id.into(),
         app_id: app_id.into(),
         operation,
@@ -158,7 +157,6 @@ async fn invoke(
                 );
             }
             Reply {
-                version: VERSION,
                 request_id: request.request_id.clone(),
                 selected,
             }

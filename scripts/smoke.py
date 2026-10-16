@@ -229,9 +229,10 @@ try:
         print('test artifacts:', runtime, flush=True)
         print(run([str(example), 'capture']), flush=True)
         if args.render:
-            request = {'version': 1, 'request_id': 'render-test', 'app_id': 'org.knave.Test',
+            request = {'request_id': 'render-test', 'app_id': 'org.knave.Test',
                 'operation': 'screenshot', 'multiple': False, 'sources': [{'id': 1, 'name': 'Nested display',
                 'description': 'Native monitor selection', 'width': 1904, 'height': 982,
+                'kind': {'type': 'monitor'},
                 'preview_png': None}]}
             picker = spawn([env['XDP_KNAVE_SHELL_BINARY'], 'portal-picker'], 'picker', stdin=subprocess.PIPE)
             picker.stdin.write(json.dumps(request).encode())
