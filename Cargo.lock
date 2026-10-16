@@ -660,7 +660,7 @@ dependencies = [
 [[package]]
 name = "knave-portal-api"
 version = "0.1.0"
-source = "git+https://github.com/knave-de/knave.git?rev=499584e2e68ddc4527157ca69d0c0c7d711e8daf#499584e2e68ddc4527157ca69d0c0c7d711e8daf"
+source = "git+https://github.com/knave-de/knave.git?rev=73f6548b026d2ecfffdc0bc9234ae0ab30d8bacc#73f6548b026d2ecfffdc0bc9234ae0ab30d8bacc"
 dependencies = [
  "serde",
  "serde_json",

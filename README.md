@@ -200,10 +200,9 @@ unset; Knave-prefixed values take precedence.
 
 #### Picker protocol
 
-The native command is `knave-shell portal-picker`. It reads one versioned JSON
-request on stdin and returns one versioned JSON reply on stdout. The
-`knave-portal-api` crate defines and validates this private contract. Requests are
-limited to 64 sources and 2 MiB in v2 (monitor-only v1 accepts eight),
+The native command is `knave-shell portal-picker`. It reads one JSON request on
+stdin and returns one JSON reply on stdout. The `knave-portal-api` crate defines
+and validates this private contract. Requests are limited to 64 sources and 2 MiB,
 replies to 4 KiB, with one consent dialog at a time and a 120-second consent deadline. Sharing controls live until session close.
 
 Native sharing offers Screen, Window and Workspaces tabs when supported and
