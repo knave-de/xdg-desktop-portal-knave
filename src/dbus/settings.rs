@@ -8,7 +8,13 @@
 //!
 //! # Configuration
 //!
-//! Settings are read from environment variables with sensible defaults:
+//! Appearance comes from the canonical Knave configuration
+//! (`~/.config/knave/config.toml`). `[appearance] theme` is the desktop
+//! preference: `dark`/`light` force `color-scheme` 1/2, while `system` reports
+//! no preference and still honors the legacy `[portal] color_scheme` value. The
+//! portal watches the file and re-publishes `SettingChanged` when it is saved.
+//!
+//! Environment variables override the configuration with sensible defaults:
 //!
 //! - `XDP_KNAVE_COLOR_SCHEME` — `0` (default), `1` (dark), `2` (light)
 //! - `XDP_KNAVE_ACCENT_COLOR` — `r,g,b` as floats (e.g., `0.21,0.52,0.89`)
@@ -53,13 +59,10 @@ impl SettingsInterface {
         let mut appearance = HashMap::new();
         if let Ok(document) = &canonical {
             if document.path().exists() {
-                let portal = &document.config().portal;
-                let scheme = if crate::env::var("COLOR_SCHEME").is_ok() || portal.color_scheme == 0
-                {
-                    Self::detect_color_scheme()
-                } else {
-                    u32::from(portal.color_scheme)
-                };
+                let config = document.config();
+                let portal = &config.portal;
+                let scheme =
+                    Self::resolve_color_scheme(config.appearance.theme, portal.color_scheme);
                 appearance.insert("color-scheme".into(), OwnedValue::from(scheme));
                 let accent =
                     crate::env::var("ACCENT_COLOR").unwrap_or_else(|_| portal.accent_color.clone());
@@ -118,6 +121,29 @@ impl SettingsInterface {
         );
 
         appearance
+    }
+
+    /// Resolve the `color-scheme` served to applications.
+    ///
+    /// Priority:
+    /// 1. `XDP_KNAVE_COLOR_SCHEME` environment override;
+    /// 2. the explicit `[appearance] theme` (`dark`/`light`); and
+    /// 3. while the theme is `system`, the legacy `[portal] color_scheme`
+    ///    value, falling back to `GTK_THEME` detection.
+    fn resolve_color_scheme(theme: knave_config::Theme, portal_color_scheme: u8) -> u32 {
+        if crate::env::var("COLOR_SCHEME").is_ok() {
+            return Self::detect_color_scheme();
+        }
+        match theme {
+            knave_config::Theme::System => {
+                if portal_color_scheme == 0 {
+                    Self::detect_color_scheme()
+                } else {
+                    u32::from(portal_color_scheme)
+                }
+            }
+            theme => u32::from(theme.color_scheme()),
+        }
     }
 
     /// Detect color scheme preference.
@@ -365,6 +391,34 @@ mod tests {
         // Note: this test may be affected by the test runner's environment
         let scheme = SettingsInterface::detect_color_scheme();
         assert!(scheme <= 2);
+    }
+
+    #[test]
+    fn theme_resolves_to_portal_color_scheme() {
+        // Note: an XDP_KNAVE_COLOR_SCHEME override would take precedence here.
+        assert_eq!(
+            SettingsInterface::resolve_color_scheme(knave_config::Theme::Dark, 0),
+            1
+        );
+        assert_eq!(
+            SettingsInterface::resolve_color_scheme(knave_config::Theme::Light, 0),
+            2
+        );
+        // An explicit theme wins over the legacy [portal] color_scheme value.
+        assert_eq!(
+            SettingsInterface::resolve_color_scheme(knave_config::Theme::Light, 1),
+            2
+        );
+    }
+
+    #[test]
+    fn system_theme_honors_legacy_color_scheme() {
+        assert_eq!(
+            SettingsInterface::resolve_color_scheme(knave_config::Theme::System, 2),
+            2
+        );
+        // 0 falls through to GTK_THEME detection, which defaults to 0.
+        assert!(SettingsInterface::resolve_color_scheme(knave_config::Theme::System, 0) <= 2);
     }
 
     #[test]
