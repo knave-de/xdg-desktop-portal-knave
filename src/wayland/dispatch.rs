@@ -1209,14 +1209,17 @@ mod tests {
     fn test_get_sources_filters_incomplete() {
         let state = WaylandState::default();
         // No outputs, no sources
-        assert!(state.get_sources().is_empty());
+        assert_eq!(state.get_sources(), [] as [crate::types::SourceInfo; 0]);
     }
 
     #[test]
     fn test_get_input_capture_zones_filters_incomplete() {
         let state = WaylandState::default();
         // No outputs, no zones
-        assert!(state.get_input_capture_zones().is_empty());
+        assert_eq!(
+            state.get_input_capture_zones(),
+            [] as [crate::types::InputCaptureZone; 0]
+        );
     }
 
     #[test]

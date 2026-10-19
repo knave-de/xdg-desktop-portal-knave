@@ -352,6 +352,6 @@ mod tests {
             .iter()
             .filter(|s| [SourceType::Window].contains(&s.source_type))
             .collect();
-        assert!(filtered.is_empty());
+        assert_eq!(filtered, [] as [&crate::types::SourceInfo; 0]);
     }
 }

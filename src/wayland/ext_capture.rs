@@ -854,7 +854,7 @@ mod tests {
         let c = BufferConstraints::default();
         assert_eq!(c.width, 0);
         assert_eq!(c.height, 0);
-        assert!(c.shm_formats.is_empty());
+        assert_eq!(c.shm_formats, [] as [u32; 0]);
         assert!(!c.done);
     }
 
