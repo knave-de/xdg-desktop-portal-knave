@@ -52,7 +52,7 @@ for key, folder in [('XDG_CONFIG_HOME', 'config'), ('XDG_DATA_HOME', 'data'),
     env[key] = str(path)
 env['XDG_DATA_DIRS'] = env['XDG_DATA_HOME'] + ':/usr/share'
 env['KNAVE_CONFIG'] = str(directory / 'portal.toml')
-Path(env['KNAVE_CONFIG']).write_text('schema_version=2\n[portal]\nenabled=true\n')
+Path(env['KNAVE_CONFIG']).write_text('[portal]\nenabled=true\n')
 for key in ['DBUS_SESSION_BUS_ADDRESS', 'KNAVE_HARNESS_READY_DIR',
             'XDP_KNAVE_SOURCE_PICKER', 'XDP_GENERIC_SOURCE_PICKER']:
     env.pop(key, None)
