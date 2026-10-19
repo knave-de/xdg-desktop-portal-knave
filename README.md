@@ -11,8 +11,8 @@ other desktop applications in a Wayland session.
 
 Knave integrates monitor screenshots and screen, window and workspace sharing with Villain's standard
 `ext-image-copy-capture-v1` protocol and Knave Shell's own Rust/wgpu UI toolkit.
-The backend pins Knave configuration and the private picker contract to immutable
-Git revisions. Install a matching Knave Shell binary for native consent. Consent starts with no selected source; previews,
+The backend consumes Knave configuration from a local path and pins the private
+picker and capture contracts to immutable Git revisions. Install a matching Knave Shell binary for native consent. Consent starts with no selected source; previews,
 explicit confirmation, cancellation, and a Stop sharing control belong to Shell.
 
 The backend connects to the compositor as a standalone Wayland client and uses
