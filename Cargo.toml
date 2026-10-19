@@ -72,7 +72,7 @@ rustdoc-args = ["--cfg", "docsrs"]
 
 [dependencies]
 knave-capture-protocol = { git = "https://github.com/knave-de/knave.git", rev = "499584e2e68ddc4527157ca69d0c0c7d711e8daf", features = ["client"] }
-knave-config = { git = "https://github.com/knave-de/knave.git", rev = "50f1b2e4c95c5020f39868a023a89cfebf38e27c" }
+knave-config = { git = "https://github.com/knave-de/knave.git", rev = "0e362226507656fa01a080998bbba30da46b9766" }
 knave-portal-api = { git = "https://github.com/knave-de/knave.git", rev = "73f6548b026d2ecfffdc0bc9234ae0ab30d8bacc" }
 serde_json = "1"
 tempfile = "3.8"
