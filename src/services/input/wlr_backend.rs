@@ -1722,12 +1722,12 @@ mod tests {
 
         let mut regions = WlrInputBackend::compute_pointer_regions(&mappings);
         regions.sort_by_key(|r| r.offset_x);
-        assert_eq!(
-            regions[0].scale, 2.0,
+        assert!(
+            (regions[0].scale - 2.0).abs() < f32::EPSILON,
             "HiDPI output must keep its own scale"
         );
-        assert_eq!(
-            regions[1].scale, 1.0,
+        assert!(
+            (regions[1].scale - 1.0).abs() < f32::EPSILON,
             "non-HiDPI output must not inherit the other output's scale"
         );
     }

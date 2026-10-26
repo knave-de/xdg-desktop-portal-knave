@@ -298,9 +298,9 @@ mod tests {
     #[test]
     fn effective_fps_is_zero_below_two_frames() {
         let mut m = CaptureMetrics::new(CaptureProtocolType::WlrScreencopy);
-        assert_eq!(m.effective_fps(), 0.0);
+        assert!(m.effective_fps().abs() < f64::EPSILON);
         m.record_frame(Duration::from_millis(10));
-        assert_eq!(m.effective_fps(), 0.0);
+        assert!(m.effective_fps().abs() < f64::EPSILON);
     }
 
     #[tokio::test]
