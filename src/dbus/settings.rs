@@ -9,9 +9,9 @@
 //! # Configuration
 //!
 //! Appearance comes from the canonical Knave configuration
-//! (`~/.config/knave/config.toml`). `[appearance] theme` is the desktop
+//! (`~/.config/knave/config.toml`). `[appearance.theme].mode` is the desktop
 //! preference: `dark`/`light` force `color-scheme` 1/2, while `system` reports
-//! no preference and still honors the legacy `[portal] color_scheme` value. The
+//! no preference and still honors `[portal] color_scheme`. The
 //! portal watches the file and re-publishes `SettingChanged` when it is saved.
 //!
 //! Environment variables override the configuration with sensible defaults:
@@ -127,8 +127,8 @@ impl SettingsInterface {
     ///
     /// Priority:
     /// 1. `XDP_KNAVE_COLOR_SCHEME` environment override;
-    /// 2. the explicit `[appearance] theme` (`dark`/`light`); and
-    /// 3. while the theme is `system`, the legacy `[portal] color_scheme`
+    /// 2. the explicit `[appearance.theme].mode` (`dark`/`light`); and
+    /// 3. while the mode is `system`, the `[portal] color_scheme`
     ///    value, falling back to `GTK_THEME` detection.
     fn resolve_color_scheme(theme: knave_config::Theme, portal_color_scheme: u8) -> u32 {
         if crate::env::var("COLOR_SCHEME").is_ok() {
