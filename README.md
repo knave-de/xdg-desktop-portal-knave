@@ -31,8 +31,15 @@ version.
 | `ScreenCast` | v6 | ext-image-copy-capture-v1 (screen, window, workspaces) | wlr-screencopy-v1 |
 | `Settings` | v2 | Canonical Knave configuration | Environment / GTK_THEME |
 | `Screenshot` | v2 | Interactive monitor capture to PNG | -- |
+| `GlobalShortcuts` | v2 | Villain desktop shortcut registry | -- |
 
-The shipped descriptor advertises these three interfaces. RemoteDesktop,
+Applications register through the standard XDG GlobalShortcuts portal. Knave
+binds requested preferred triggers when they do not collide with compositor
+bindings and emits both activation and deactivation signals. Shortcut sessions
+release their bindings when closed. ConfigureShortcuts currently returns
+NotSupported because Knave does not yet ship a shortcut assignment window.
+
+The shipped descriptor advertises these four interfaces. RemoteDesktop,
 InputCapture, Clipboard, cursor metadata and native color picking
 are not part of the supported Knave integration. PickColor returns NotSupported.
 Without capture protocols the backend serves Settings independently of PipeWire.
@@ -131,6 +138,7 @@ default=gtk
 org.freedesktop.impl.portal.ScreenCast=knave
 org.freedesktop.impl.portal.Settings=knave
 org.freedesktop.impl.portal.Screenshot=knave
+org.freedesktop.impl.portal.GlobalShortcuts=knave
 ```
 
 ### Automatic Activation
