@@ -14,7 +14,7 @@ use knave_portal_api::{
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     process::Command,
-    sync::{Mutex, OwnedSemaphorePermit},
+    sync::{Mutex, SemaphorePermit},
     time::timeout,
 };
 use zbus::{
@@ -120,7 +120,7 @@ impl GlobalShortcutsInterface {
     fn read_string(options: &HashMap<String, OwnedValue>, name: &str) -> Option<String> {
         options
             .get(name)
-            .and_then(|value| <String>::try_from(value).ok())
+            .and_then(|value| <String>::try_from(value.clone()).ok())
     }
 
     fn format_shortcuts(shortcuts: &[Shortcut]) -> Vec<(String, HashMap<String, OwnedValue>)> {
@@ -131,11 +131,13 @@ impl GlobalShortcutsInterface {
                 let mut values = HashMap::new();
                 values.insert(
                     "description".into(),
-                    OwnedValue::from(shortcut.description.clone()),
+                    OwnedValue::try_from(Value::from(shortcut.description.clone()))
+                        .expect("description is a valid D-Bus string"),
                 );
                 values.insert(
                     "trigger_description".into(),
-                    OwnedValue::from(trigger.clone()),
+                    OwnedValue::try_from(Value::from(trigger.clone()))
+                        .expect("trigger is a valid D-Bus string"),
                 );
                 (shortcut.id.clone(), values)
             })
@@ -220,7 +222,7 @@ impl GlobalShortcutsInterface {
 
     async fn configure_dialog(
         request: &ShortcutAssignmentRequest,
-        _permit: &OwnedSemaphorePermit,
+        _permit: &SemaphorePermit<'_>,
     ) -> Result<Option<(String, String)>, String> {
         request.validate()?;
         let payload = serde_json::to_vec(request).map_err(|error| error.to_string())?;
@@ -329,7 +331,7 @@ impl GlobalShortcutsInterface {
             .await
         {
             self.state.lock().await.sessions.remove(&key);
-            return Err(error);
+            return Err(error.into());
         }
         let _ = server.remove::<RequestInterface, _>(&handle).await;
         Ok((Response::Success.to_u32(), empty_results()))

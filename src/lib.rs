@@ -91,6 +91,7 @@ use std::{
     sync::{Arc, mpsc},
 };
 
+pub use dbus::GlobalShortcutsInterface;
 pub use error::{PortalError, Result};
 // Backend traits and factories
 pub use services::capture::{CaptureBackend, CaptureDetector, CapturePreference, CaptureProtocol};
