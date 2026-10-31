@@ -416,10 +416,11 @@ impl GlobalShortcutsInterface {
     #[zbus(name = "ListShortcuts")]
     async fn list_shortcuts(
         &self,
-        _handle: ObjectPath<'_>,
+        handle: ObjectPath<'_>,
         session_handle: ObjectPath<'_>,
         #[zbus(header)] header: zbus::message::Header<'_>,
     ) -> zbus::fdo::Result<(u32, HashMap<String, OwnedValue>)> {
+        let _ = (handle,);
         let owner = header
             .sender()
             .ok_or_else(|| zbus::fdo::Error::Failed("Missing sender".into()))?
