@@ -416,7 +416,7 @@ impl GlobalShortcutsInterface {
     #[zbus(name = "ListShortcuts")]
     async fn list_shortcuts(
         &self,
-        handle: ObjectPath<'_>,
+        _handle: ObjectPath<'_>,
         session_handle: ObjectPath<'_>,
         #[zbus(header)] header: zbus::message::Header<'_>,
     ) -> zbus::fdo::Result<(u32, HashMap<String, OwnedValue>)> {
@@ -504,39 +504,34 @@ impl GlobalShortcutsInterface {
                     "shortcut conflicts with an existing binding; choose another".into(),
                 )
             });
-            match updated {
-                Ok(trigger) => {
-                    let mut state = self.state.lock().await;
-                    let Some(session) = state
-                        .sessions
-                        .get_mut(&session_key)
-                        .filter(|s| s.owner == owner)
-                    else {
-                        drop(state);
-                        Self::unregister(app_id.clone(), session_key.clone(), shortcut_id).await;
-                        return Err(zbus::fdo::Error::Failed(
-                            "shortcut session closed during configuration".into(),
-                        ));
-                    };
-                    if let Some(shortcut) =
-                        session.shortcuts.iter_mut().find(|s| s.id == shortcut_id)
-                    {
-                        shortcut.trigger = Some(trigger);
-                    } else {
-                        return Err(zbus::fdo::Error::Failed(
-                            "configured shortcut no longer exists".into(),
-                        ));
-                    }
-                    let changed = Self::format_shortcuts(&session.shortcuts);
+            if let Ok(trigger) = updated {
+                let mut state = self.state.lock().await;
+                let Some(session) = state
+                    .sessions
+                    .get_mut(&session_key)
+                    .filter(|s| s.owner == owner)
+                else {
                     drop(state);
-                    let emitter = SignalEmitter::new(connection, "/org/freedesktop/portal/desktop")
-                        .map_err(|error| zbus::fdo::Error::Failed(error.to_string()))?;
-                    Self::shortcuts_changed(&emitter, session_handle, changed)
-                        .await
-                        .map_err(|error| zbus::fdo::Error::Failed(error.to_string()))?;
-                    return Ok(());
+                    Self::unregister(app_id.clone(), session_key.clone(), shortcut_id).await;
+                    return Err(zbus::fdo::Error::Failed(
+                        "shortcut session closed during configuration".into(),
+                    ));
+                };
+                if let Some(shortcut) = session.shortcuts.iter_mut().find(|s| s.id == shortcut_id) {
+                    shortcut.trigger = Some(trigger);
+                } else {
+                    return Err(zbus::fdo::Error::Failed(
+                        "configured shortcut no longer exists".into(),
+                    ));
                 }
-                Err(_) => {}
+                let changed = Self::format_shortcuts(&session.shortcuts);
+                drop(state);
+                let emitter = SignalEmitter::new(connection, "/org/freedesktop/portal/desktop")
+                    .map_err(|error| zbus::fdo::Error::Failed(error.to_string()))?;
+                Self::shortcuts_changed(&emitter, session_handle, changed)
+                    .await
+                    .map_err(|error| zbus::fdo::Error::Failed(error.to_string()))?;
+                return Ok(());
             }
         }
         Err(zbus::fdo::Error::Failed(
@@ -570,7 +565,7 @@ impl GlobalShortcutsInterface {
     ) -> zbus::Result<()>;
 
     #[zbus(property, name = "version")]
-    #[allow(
+    #[expect(
         clippy::unused_async_trait_impl,
         reason = "zbus property handlers are async"
     )]
@@ -632,7 +627,7 @@ impl GlobalShortcutSessionInterface {
     async fn closed(emitter: &SignalEmitter<'_>) -> zbus::Result<()>;
 
     #[zbus(property, name = "version")]
-    #[allow(
+    #[expect(
         clippy::unused_async_trait_impl,
         reason = "zbus property handlers are async"
     )]
