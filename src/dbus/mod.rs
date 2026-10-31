@@ -6,9 +6,11 @@
 //! - `org.freedesktop.impl.portal.Clipboard`
 //! - `org.freedesktop.impl.portal.Settings`
 //! - `org.freedesktop.impl.portal.Screenshot`
+//! - `org.freedesktop.impl.portal.Email`
 //! - `org.freedesktop.impl.portal.InputCapture`
 
 mod clipboard;
+mod email;
 mod global_shortcuts;
 mod input_capture;
 mod remote_desktop;
@@ -23,6 +25,7 @@ use std::collections::HashMap;
 pub use clipboard::{
     ClipboardInterface, ClipboardSignal, PendingWriteEntry, PendingWrites, next_clipboard_serial,
 };
+pub use email::EmailInterface;
 pub use global_shortcuts::GlobalShortcutsInterface;
 pub use input_capture::{
     InputCaptureInterface, activated_options, deactivated_options, emit_zones_changed,
