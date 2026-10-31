@@ -36,8 +36,9 @@ version.
 Applications register through the standard XDG GlobalShortcuts portal. Knave
 binds requested preferred triggers when they do not collide with compositor
 bindings and emits both activation and deactivation signals. Shortcut sessions
-release their bindings when closed. ConfigureShortcuts currently returns
-NotSupported because Knave does not yet ship a shortcut assignment window.
+release their bindings when closed. ConfigureShortcuts opens a Knave Shell dialog
+where users can select an action and assign a key chord; conflicting keys are
+rejected without replacing the current binding.
 
 The shipped descriptor advertises these four interfaces. RemoteDesktop,
 InputCapture, Clipboard, cursor metadata and native color picking
