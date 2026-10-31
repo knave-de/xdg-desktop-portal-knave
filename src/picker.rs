@@ -15,8 +15,8 @@ use tokio::{
     process::Command,
     sync::{Semaphore, watch},
 };
-static DIALOG: Semaphore = Semaphore::const_new(1);
-fn shell_binary() -> String {
+pub(crate) static DIALOG: Semaphore = Semaphore::const_new(1);
+pub(crate) fn shell_binary() -> String {
     crate::env::var("SHELL_BINARY").unwrap_or_else(|_| {
         std::env::var("HOME").map_or_else(
             |_| "knave-shell".into(),

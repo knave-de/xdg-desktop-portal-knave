@@ -658,9 +658,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "knave-desktop-api"
+version = "0.1.0"
+source = "git+https://github.com/knave-de/knave.git?rev=36c321360b9891b9d0dfafac8fdbb580bc220c8c#36c321360b9891b9d0dfafac8fdbb580bc220c8c"
+dependencies = [
+ "base64",
+ "serde",
+ "serde_json",
+ "thiserror",
+]
+
+[[package]]
 name = "knave-portal-api"
 version = "0.1.0"
-source = "git+https://github.com/knave-de/knave.git?rev=73f6548b026d2ecfffdc0bc9234ae0ab30d8bacc#73f6548b026d2ecfffdc0bc9234ae0ab30d8bacc"
+source = "git+https://github.com/knave-de/knave.git?rev=36c321360b9891b9d0dfafac8fdbb580bc220c8c#36c321360b9891b9d0dfafac8fdbb580bc220c8c"
 dependencies = [
  "serde",
  "serde_json",
@@ -1744,6 +1755,7 @@ dependencies = [
  "futures",
  "knave-capture-protocol",
  "knave-config",
+ "knave-desktop-api",
  "knave-portal-api",
  "lamco-data-control",
  "libc",

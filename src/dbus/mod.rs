@@ -9,6 +9,7 @@
 //! - `org.freedesktop.impl.portal.InputCapture`
 
 mod clipboard;
+mod global_shortcuts;
 mod input_capture;
 mod remote_desktop;
 mod request;
@@ -22,6 +23,7 @@ use std::collections::HashMap;
 pub use clipboard::{
     ClipboardInterface, ClipboardSignal, PendingWriteEntry, PendingWrites, next_clipboard_serial,
 };
+pub use global_shortcuts::GlobalShortcutsInterface;
 pub use input_capture::{
     InputCaptureInterface, activated_options, deactivated_options, emit_zones_changed,
 };

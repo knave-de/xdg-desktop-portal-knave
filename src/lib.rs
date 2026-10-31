@@ -62,6 +62,7 @@
 //! - `org.freedesktop.impl.portal.Settings` (v2) - Desktop appearance settings
 //! - `org.freedesktop.impl.portal.Screenshot` (v2) - Screen capture to file
 //! - `org.freedesktop.impl.portal.InputCapture` (v2) - Barrier-triggered input capture
+//! - `org.freedesktop.impl.portal.GlobalShortcuts` (v2) - App shortcuts through Villain
 //!   (session lifecycle and zone geometry are real; barrier enforcement is not
 //!   implemented yet -- see the module docs on [`dbus::InputCaptureInterface`])
 
@@ -90,6 +91,7 @@ use std::{
     sync::{Arc, mpsc},
 };
 
+pub use dbus::GlobalShortcutsInterface;
 pub use error::{PortalError, Result};
 // Backend traits and factories
 pub use services::capture::{CaptureBackend, CaptureDetector, CapturePreference, CaptureProtocol};
@@ -240,8 +242,8 @@ impl PortalBackend {
         env::warn_on_legacy_settings();
 
         use dbus::{
-            ClipboardInterface, ClipboardSignal, InputCaptureInterface, RemoteDesktopInterface,
-            ScreenCastInterface, ScreenshotInterface, SettingsInterface,
+            ClipboardInterface, ClipboardSignal, GlobalShortcutsInterface, InputCaptureInterface,
+            RemoteDesktopInterface, ScreenCastInterface, ScreenshotInterface, SettingsInterface,
         };
 
         // Create clipboard interface with shared pending_writes
@@ -252,9 +254,11 @@ impl PortalBackend {
         let pending_writes = clipboard_iface.pending_writes();
 
         let path = "/org/freedesktop/portal/desktop";
+        let global_shortcuts = GlobalShortcutsInterface::new();
         let mut builder = zbus::connection::Builder::session()?
             .name("org.freedesktop.impl.portal.desktop.knave")?
-            .serve_at(path, SettingsInterface::new())?;
+            .serve_at(path, SettingsInterface::new())?
+            .serve_at(path, global_shortcuts.clone())?;
         let capture = self.available_protocols.ext_image_copy_capture
             || self.available_protocols.wlr_screencopy;
         let input = self.available_protocols.zwp_virtual_keyboard
@@ -311,6 +315,8 @@ impl PortalBackend {
             }
         }
         let connection = builder.build().await?;
+
+        Self::monitor_global_shortcut_activations(connection.clone());
 
         tracing::info!(
             "Portal backend started on {}",
@@ -412,6 +418,7 @@ impl PortalBackend {
 
         // A lost bus ends this service and lets main release capture resources.
         connection.closed().await;
+        global_shortcuts.clear().await;
 
         Ok(())
     }
@@ -1092,6 +1099,58 @@ impl PortalBackend {
                 tracing::info!(count = stale.len(), "Cleaned up stale sessions");
             }
         }
+    }
+
+    fn monitor_global_shortcut_activations(connection: zbus::Connection) {
+        use knave_desktop_api::{DesktopEvent, DesktopSubscription};
+        use std::time::Duration;
+
+        let (sender, mut receiver) = tokio::sync::mpsc::channel(64);
+        let _reader = tokio::task::spawn_blocking(move || {
+            loop {
+                match DesktopSubscription::connect() {
+                    Ok(mut subscription) => loop {
+                        match subscription.next_event() {
+                            Ok(event) => {
+                                if sender.blocking_send(event).is_err() {
+                                    return;
+                                }
+                            }
+                            Err(error) => {
+                                tracing::debug!(%error, "desktop shortcut event stream ended");
+                                break;
+                            }
+                        }
+                    },
+                    Err(error) => {
+                        tracing::debug!(%error, "desktop shortcut event stream unavailable");
+                    }
+                }
+                std::thread::sleep(Duration::from_secs(1));
+            }
+        });
+        let close_watch = connection.clone();
+        tokio::spawn(async move {
+            tokio::select! {
+                () = close_watch.closed() => {},
+                () = async move {
+                    while let Some(event) = receiver.recv().await {
+                        let result = match event {
+                            DesktopEvent::GlobalShortcutActivated { session_handle, shortcut_id, .. } => {
+                                GlobalShortcutsInterface::emit_activated(&connection, &session_handle, &shortcut_id).await
+                            }
+                            DesktopEvent::GlobalShortcutDeactivated { session_handle, shortcut_id, .. } => {
+                                GlobalShortcutsInterface::emit_deactivated(&connection, &session_handle, &shortcut_id).await
+                            }
+                            _ => continue,
+                        };
+                        if let Err(error) = result {
+                            tracing::debug!(%error, "could not emit global shortcut state");
+                        }
+                    }
+                } => {},
+            }
+        });
     }
 }
 
