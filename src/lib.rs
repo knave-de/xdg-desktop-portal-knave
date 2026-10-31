@@ -1123,7 +1123,7 @@ impl PortalBackend {
                         }
                     },
                     Err(error) => {
-                        tracing::debug!(%error, "desktop shortcut event stream unavailable")
+                        tracing::debug!(%error, "desktop shortcut event stream unavailable");
                     }
                 }
                 std::thread::sleep(Duration::from_secs(1));

@@ -51,6 +51,12 @@ pub struct GlobalShortcutsInterface {
     state: Arc<Mutex<ShortcutState>>,
 }
 
+impl Default for GlobalShortcutsInterface {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl GlobalShortcutsInterface {
     /// Create the interface and its in-memory session registry.
     pub fn new() -> Self {
@@ -126,20 +132,18 @@ impl GlobalShortcutsInterface {
     fn format_shortcuts(shortcuts: &[Shortcut]) -> Vec<(String, HashMap<String, OwnedValue>)> {
         shortcuts
             .iter()
-            .filter_map(|shortcut| Some((shortcut, shortcut.trigger.as_ref()?)))
-            .map(|(shortcut, trigger)| {
-                let mut values = HashMap::new();
-                values.insert(
-                    "description".into(),
-                    OwnedValue::try_from(Value::from(shortcut.description.clone()))
-                        .expect("description is a valid D-Bus string"),
-                );
-                values.insert(
-                    "trigger_description".into(),
-                    OwnedValue::try_from(Value::from(trigger.clone()))
-                        .expect("trigger is a valid D-Bus string"),
-                );
-                (shortcut.id.clone(), values)
+            .filter_map(|shortcut| {
+                let trigger = shortcut.trigger.as_ref()?;
+                let description =
+                    OwnedValue::try_from(Value::from(shortcut.description.clone())).ok()?;
+                let trigger = OwnedValue::try_from(Value::from(trigger.clone())).ok()?;
+                Some((
+                    shortcut.id.clone(),
+                    HashMap::from([
+                        ("description".into(), description),
+                        ("trigger_description".into(), trigger),
+                    ]),
+                ))
             })
             .collect()
     }
@@ -293,10 +297,11 @@ impl GlobalShortcutsInterface {
         handle: ObjectPath<'_>,
         session_handle: ObjectPath<'_>,
         app_id: &str,
-        _options: HashMap<String, OwnedValue>,
+        options: HashMap<String, OwnedValue>,
         #[zbus(header)] header: zbus::message::Header<'_>,
         #[zbus(object_server)] server: &zbus::ObjectServer,
     ) -> zbus::fdo::Result<(u32, HashMap<String, OwnedValue>)> {
+        let _ = (options,);
         if app_id.is_empty() || app_id.len() > 255 {
             return Ok((Response::Other.to_u32(), empty_results()));
         }
@@ -340,13 +345,14 @@ impl GlobalShortcutsInterface {
     #[zbus(name = "BindShortcuts")]
     async fn bind_shortcuts(
         &self,
-        _handle: ObjectPath<'_>,
+        handle: ObjectPath<'_>,
         session_handle: ObjectPath<'_>,
         shortcuts: Vec<(String, HashMap<String, OwnedValue>)>,
-        _parent_window: &str,
-        _options: HashMap<String, OwnedValue>,
+        parent_window: &str,
+        options: HashMap<String, OwnedValue>,
         #[zbus(header)] header: zbus::message::Header<'_>,
     ) -> zbus::fdo::Result<(u32, HashMap<String, OwnedValue>)> {
+        let _ = (handle, parent_window, options);
         let session_key = session_handle.to_string();
         if shortcuts.len() > 64 {
             return Ok((Response::Other.to_u32(), empty_results()));
@@ -398,12 +404,9 @@ impl GlobalShortcutsInterface {
                 trigger,
             });
         }
-        self.state
-            .lock()
-            .await
-            .sessions
-            .get_mut(&session_key)
-            .map(|session| session.shortcuts = requested.clone());
+        if let Some(session) = self.state.lock().await.sessions.get_mut(&session_key) {
+            session.shortcuts.clone_from(&requested);
+        }
         Ok((
             Response::Success.to_u32(),
             Self::shortcuts_result(&requested),
@@ -413,7 +416,7 @@ impl GlobalShortcutsInterface {
     #[zbus(name = "ListShortcuts")]
     async fn list_shortcuts(
         &self,
-        _handle: ObjectPath<'_>,
+        handle: ObjectPath<'_>,
         session_handle: ObjectPath<'_>,
         #[zbus(header)] header: zbus::message::Header<'_>,
     ) -> zbus::fdo::Result<(u32, HashMap<String, OwnedValue>)> {
@@ -439,11 +442,12 @@ impl GlobalShortcutsInterface {
     async fn configure_shortcuts(
         &self,
         session_handle: ObjectPath<'_>,
-        _parent_window: &str,
-        _options: HashMap<String, OwnedValue>,
+        parent_window: &str,
+        options: HashMap<String, OwnedValue>,
         #[zbus(header)] header: zbus::message::Header<'_>,
         #[zbus(connection)] connection: &zbus::Connection,
     ) -> zbus::fdo::Result<()> {
+        let _ = (parent_window, options);
         let session_key = session_handle.to_string();
         let owner = header
             .sender()
@@ -532,7 +536,7 @@ impl GlobalShortcutsInterface {
                         .map_err(|error| zbus::fdo::Error::Failed(error.to_string()))?;
                     return Ok(());
                 }
-                Err(_) => continue,
+                Err(_) => {}
             }
         }
         Err(zbus::fdo::Error::Failed(
@@ -566,6 +570,10 @@ impl GlobalShortcutsInterface {
     ) -> zbus::Result<()>;
 
     #[zbus(property, name = "version")]
+    #[allow(
+        clippy::unused_async_trait_impl,
+        reason = "zbus property handlers are async"
+    )]
     async fn version(&self) -> u32 {
         2
     }
@@ -624,6 +632,10 @@ impl GlobalShortcutSessionInterface {
     async fn closed(emitter: &SignalEmitter<'_>) -> zbus::Result<()>;
 
     #[zbus(property, name = "version")]
+    #[allow(
+        clippy::unused_async_trait_impl,
+        reason = "zbus property handlers are async"
+    )]
     async fn version(&self) -> u32 {
         1
     }
