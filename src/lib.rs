@@ -1147,7 +1147,7 @@ impl PortalBackend {
                             tracing::debug!(%error, "could not emit global shortcut state");
                         }
                     }
-                },
+                } => {},
             }
         });
     }
