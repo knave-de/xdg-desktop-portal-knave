@@ -3,7 +3,7 @@
 //! Implements `org.freedesktop.impl.portal.Email` by opening a mailto URI in
 //! the host's default email application.
 
-use std::collections::HashMap;
+use std::{collections::HashMap, time::Duration};
 
 use zbus::{
     interface,
@@ -28,20 +28,30 @@ impl EmailInterface {
     ) -> zbus::fdo::Result<(u32, HashMap<String, OwnedValue>)> {
         let _ = (handle, app_id, parent_window);
         let uri = mailto_uri(&options)?;
-        let status = tokio::process::Command::new("xdg-open")
+        let mut child = tokio::process::Command::new("xdg-open")
             .arg(&uri)
-            .status()
-            .await
+            .spawn()
             .map_err(|error| {
                 zbus::fdo::Error::Failed(format!("Could not open the email application: {error}"))
             })?;
-        if !status.success() {
-            return Err(zbus::fdo::Error::Failed(format!(
-                "The email application exited with {status}"
-            )));
-        }
+        // Give xdg-open a brief window to report dispatch errors, without
+        // waiting for the user's mail application to exit.
+        check_launcher_status(&mut child).await?;
 
         Ok((Response::Success.to_u32(), HashMap::new()))
+    }
+}
+
+/// Report fast launcher failures while allowing a long-running mail client to stay open.
+async fn check_launcher_status(child: &mut tokio::process::Child) -> zbus::fdo::Result<()> {
+    match tokio::time::timeout(Duration::from_millis(250), child.wait()).await {
+        Ok(Ok(status)) if !status.success() => Err(zbus::fdo::Error::Failed(format!(
+            "The email application exited with {status}"
+        ))),
+        Ok(Err(error)) => Err(zbus::fdo::Error::Failed(format!(
+            "Could not check the email application launch: {error}"
+        ))),
+        Ok(Ok(_)) | Err(_) => Ok(()),
     }
 }
 
@@ -203,5 +213,35 @@ mod tests {
     #[test]
     fn omits_empty_options() {
         assert_eq!(mailto_uri(&HashMap::new()).unwrap(), "mailto:");
+    }
+
+    #[tokio::test]
+    async fn reports_a_fast_launcher_failure() {
+        let mut child = tokio::process::Command::new("sh")
+            .args(["-c", "exit 7"])
+            .spawn()
+            .unwrap();
+
+        assert!(matches!(
+            check_launcher_status(&mut child).await,
+            Err(zbus::fdo::Error::Failed(_))
+        ));
+    }
+
+    #[tokio::test]
+    async fn returns_while_a_mail_client_remains_open() {
+        let mut child = tokio::process::Command::new("sh")
+            .args(["-c", "sleep 2"])
+            .spawn()
+            .unwrap();
+
+        assert!(
+            tokio::time::timeout(Duration::from_secs(1), check_launcher_status(&mut child))
+                .await
+                .unwrap()
+                .is_ok()
+        );
+        child.kill().await.unwrap();
+        let _ = child.wait().await;
     }
 }
