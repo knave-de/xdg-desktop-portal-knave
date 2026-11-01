@@ -2,7 +2,11 @@
 use std::{
     collections::{HashMap, HashSet},
     process::Stdio,
-    sync::Arc,
+    sync::{
+        Arc, Mutex as StdMutex,
+        atomic::{AtomicBool, Ordering},
+    },
+    thread,
     time::Duration,
 };
 
@@ -45,39 +49,58 @@ impl BackgroundInterface {
 
     /// Watch compositor window snapshots and emit state changes until D-Bus closes.
     pub async fn monitor(&self, connection: Connection) {
-        let connected = tokio::task::spawn_blocking(DesktopSubscription::connect).await;
-        let Ok(Ok(mut subscription)) = connected else {
-            tracing::warn!("background app state monitor could not connect to the desktop API");
-            return;
-        };
-        let initial = match subscription.next_snapshot() {
-            Ok(snapshot) => snapshot,
-            Err(error) => {
-                tracing::warn!(%error, "background app state monitor did not receive an initial snapshot");
-                return;
-            }
-        };
-        let cancel = match subscription.cancel_handle() {
-            Ok(cancel) => cancel,
-            Err(error) => {
-                tracing::warn!(%error, "background app state monitor could not create a cancellation handle");
-                return;
-            }
-        };
-        *self.windows.lock().await = Self::window_states(&initial.windows);
-        self.refresh_state().await;
-
         let (snapshot_tx, mut snapshot_rx) = watch::channel(HashMap::new());
+        let stop = Arc::new(AtomicBool::new(false));
+        let active_cancel = Arc::new(StdMutex::new(None));
+        let worker_stop = Arc::clone(&stop);
+        let worker_cancel = Arc::clone(&active_cancel);
         let worker: JoinHandle<()> = tokio::task::spawn_blocking(move || {
-            while let Ok(snapshot) = subscription.next_snapshot() {
-                snapshot_tx.send_replace(Self::window_states(&snapshot.windows));
+            while !worker_stop.load(Ordering::Acquire) {
+                let mut subscription = match DesktopSubscription::connect() {
+                    Ok(subscription) => subscription,
+                    Err(error) => {
+                        tracing::debug!(%error, "background app state monitor could not connect");
+                        thread::sleep(Duration::from_secs(1));
+                        continue;
+                    }
+                };
+                match subscription.cancel_handle() {
+                    Ok(cancel) => *worker_cancel.lock().unwrap() = Some(cancel),
+                    Err(error) => {
+                        tracing::warn!(%error, "background app state monitor could not create a cancellation handle");
+                        thread::sleep(Duration::from_secs(1));
+                        continue;
+                    }
+                }
+                loop {
+                    match subscription.next_snapshot() {
+                        Ok(snapshot) => {
+                            snapshot_tx.send_replace(Self::window_states(&snapshot.windows));
+                        }
+                        Err(error) => {
+                            tracing::debug!(%error, "background app state stream ended");
+                            break;
+                        }
+                    }
+                    if worker_stop.load(Ordering::Acquire) {
+                        break;
+                    }
+                }
+                *worker_cancel.lock().unwrap() = None;
+                snapshot_tx.send_replace(HashMap::new());
+                if !worker_stop.load(Ordering::Acquire) {
+                    thread::sleep(Duration::from_secs(1));
+                }
             }
         });
         let emitter = match SignalEmitter::new(&connection, "/org/freedesktop/portal/desktop") {
             Ok(emitter) => emitter,
             Err(error) => {
                 tracing::warn!(%error, "background app state monitor could not create a signal emitter");
-                let _ = cancel.cancel();
+                stop.store(true, Ordering::Release);
+                if let Some(cancel) = active_cancel.lock().unwrap().as_ref() {
+                    let _ = cancel.cancel();
+                }
                 let _ = worker.await;
                 return;
             }
@@ -99,7 +122,10 @@ impl BackgroundInterface {
                 }
             }
         }
-        let _ = cancel.cancel();
+        stop.store(true, Ordering::Release);
+        if let Some(cancel) = active_cancel.lock().unwrap().as_ref() {
+            let _ = cancel.cancel();
+        }
         let _ = worker.await;
     }
 
@@ -139,7 +165,10 @@ impl BackgroundInterface {
         }
     }
 
-    async fn ask_user(request: BackgroundRequest) -> Result<BackgroundChoice, String> {
+    async fn ask_user(
+        request: BackgroundRequest,
+        mut cancelled: watch::Receiver<bool>,
+    ) -> Result<BackgroundChoice, String> {
         request.validate()?;
         let _permit = DIALOG
             .try_acquire()
@@ -182,9 +211,15 @@ impl BackgroundInterface {
             reply.validate(&request)?;
             Ok(reply.choice)
         };
-        timeout(Duration::from_secs(300), operation)
-            .await
-            .map_err(|_| "background permission prompt timed out".to_owned())?
+        tokio::select! {
+            changed = cancelled.changed() => {
+                let _ = changed;
+                Err("background permission prompt was cancelled".to_owned())
+            }
+            result = timeout(Duration::from_secs(300), operation) => {
+                result.map_err(|_| "background permission prompt timed out".to_owned())?
+            }
+        }
     }
 }
 
@@ -207,14 +242,21 @@ impl BackgroundInterface {
         app_id: String,
         name: String,
         #[zbus(signal_emitter)] emitter: SignalEmitter<'_>,
-    ) -> (u32, HashMap<String, OwnedValue>) {
-        let choice = Self::ask_user(BackgroundRequest {
-            request_id: handle.to_string(),
-            app_id: app_id.clone(),
-            name,
-            reason: String::new(),
-        })
+        #[zbus(object_server)] server: &zbus::ObjectServer,
+    ) -> zbus::fdo::Result<(u32, HashMap<String, OwnedValue>)> {
+        let (request, cancelled) = super::RequestInterface::cancellable();
+        server.at(&handle, request).await?;
+        let choice = Self::ask_user(
+            BackgroundRequest {
+                request_id: handle.to_string(),
+                app_id: app_id.clone(),
+                name,
+                reason: String::new(),
+            },
+            cancelled,
+        )
         .await;
+        let _ = server.remove::<super::RequestInterface, _>(&handle).await;
         let result = match choice {
             Ok(BackgroundChoice::Deny) => {
                 self.approved_apps.lock().await.remove(&app_id);
@@ -244,13 +286,13 @@ impl BackgroundInterface {
                 2
             }
             Err(error) => {
-                tracing::warn!(%error, "background activity request was denied");
-                0
+                tracing::warn!(%error, "background permission prompt failed");
+                return Err(zbus::fdo::Error::Failed(error));
             }
         };
         let mut results = HashMap::new();
         results.insert("result".into(), OwnedValue::from(result));
-        (0, results)
+        Ok((0, results))
     }
 
     /// Autostart is deprecated by the portal frontend and is not enabled here.
