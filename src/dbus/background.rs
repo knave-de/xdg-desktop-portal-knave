@@ -129,6 +129,7 @@ impl BackgroundInterface {
         let _ = worker.await;
     }
 
+    /// Derive the portal's running and focused state values from window snapshots.
     fn window_states(windows: &[WindowSummary]) -> HashMap<String, u32> {
         let mut states = HashMap::new();
         for window in windows {
@@ -141,6 +142,7 @@ impl BackgroundInterface {
         states
     }
 
+    /// Recompute the published app state and report whether it changed.
     async fn refresh_state(&self) -> bool {
         let mut state = self
             .approved_apps
@@ -165,6 +167,7 @@ impl BackgroundInterface {
         }
     }
 
+    /// Show a cancellable consent prompt and validate its reply.
     async fn ask_user(
         request: BackgroundRequest,
         mut cancelled: watch::Receiver<bool>,
