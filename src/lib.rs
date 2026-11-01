@@ -61,6 +61,7 @@
 //! - `org.freedesktop.impl.portal.Clipboard` (v1) - Clipboard sync
 //! - `org.freedesktop.impl.portal.Settings` (v2) - Desktop appearance settings
 //! - `org.freedesktop.impl.portal.Screenshot` (v2) - Screen capture to file
+//! - `org.freedesktop.impl.portal.Email` - Email composition via the host client
 //! - `org.freedesktop.impl.portal.InputCapture` (v2) - Barrier-triggered input capture
 //! - `org.freedesktop.impl.portal.GlobalShortcuts` (v2) - App shortcuts through Villain
 //! - `org.freedesktop.impl.portal.Background` (v2) - Background activity consent and app state
@@ -243,9 +244,9 @@ impl PortalBackend {
         env::warn_on_legacy_settings();
 
         use dbus::{
-            BackgroundInterface, ClipboardInterface, ClipboardSignal, GlobalShortcutsInterface,
-            InputCaptureInterface, RemoteDesktopInterface, ScreenCastInterface,
-            ScreenshotInterface, SettingsInterface,
+            BackgroundInterface, ClipboardInterface, ClipboardSignal, EmailInterface,
+            GlobalShortcutsInterface, InputCaptureInterface, RemoteDesktopInterface,
+            ScreenCastInterface, ScreenshotInterface, SettingsInterface,
         };
 
         // Create clipboard interface with shared pending_writes
@@ -261,6 +262,7 @@ impl PortalBackend {
         let mut builder = zbus::connection::Builder::session()?
             .name("org.freedesktop.impl.portal.desktop.knave")?
             .serve_at(path, SettingsInterface::new())?
+            .serve_at(path, EmailInterface)?
             .serve_at(path, background_iface.clone())?
             .serve_at(path, global_shortcuts.clone())?;
         let capture = self.available_protocols.ext_image_copy_capture
