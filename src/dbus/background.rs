@@ -65,7 +65,16 @@ impl BackgroundInterface {
                     }
                 };
                 match subscription.cancel_handle() {
-                    Ok(cancel) => *worker_cancel.lock().unwrap() = Some(cancel),
+                    Ok(cancel) => {
+                        let mut active_cancel = worker_cancel
+                            .lock()
+                            .unwrap_or_else(std::sync::PoisonError::into_inner);
+                        *active_cancel = Some(cancel);
+                        if worker_stop.load(Ordering::Acquire) {
+                            *active_cancel = None;
+                            break;
+                        }
+                    }
                     Err(error) => {
                         tracing::warn!(%error, "background app state monitor could not create a cancellation handle");
                         thread::sleep(Duration::from_secs(1));
@@ -86,7 +95,9 @@ impl BackgroundInterface {
                         break;
                     }
                 }
-                *worker_cancel.lock().unwrap() = None;
+                *worker_cancel
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
                 snapshot_tx.send_replace(HashMap::new());
                 if !worker_stop.load(Ordering::Acquire) {
                     thread::sleep(Duration::from_secs(1));
@@ -98,7 +109,11 @@ impl BackgroundInterface {
             Err(error) => {
                 tracing::warn!(%error, "background app state monitor could not create a signal emitter");
                 stop.store(true, Ordering::Release);
-                if let Some(cancel) = active_cancel.lock().unwrap().as_ref() {
+                if let Some(cancel) = active_cancel
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .as_ref()
+                {
                     let _ = cancel.cancel();
                 }
                 let _ = worker.await;
@@ -123,7 +138,11 @@ impl BackgroundInterface {
             }
         }
         stop.store(true, Ordering::Release);
-        if let Some(cancel) = active_cancel.lock().unwrap().as_ref() {
+        if let Some(cancel) = active_cancel
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .as_ref()
+        {
             let _ = cancel.cancel();
         }
         let _ = worker.await;
