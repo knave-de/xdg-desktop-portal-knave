@@ -32,17 +32,24 @@ impl EmailInterface {
     ) -> zbus::fdo::Result<(u32, HashMap<String, OwnedValue>)> {
         let _ = (handle, app_id, parent_window);
         let uri = mailto_uri(&options)?;
-        tokio::process::Command::new("xdg-open")
+        let status = tokio::process::Command::new("xdg-open")
             .arg(&uri)
-            .spawn()
+            .status()
+            .await
             .map_err(|error| {
                 zbus::fdo::Error::Failed(format!("Could not open the email application: {error}"))
             })?;
+        if !status.success() {
+            return Err(zbus::fdo::Error::Failed(format!(
+                "The email application exited with {status}"
+            )));
+        }
 
         Ok((Response::Success.to_u32(), HashMap::new()))
     }
 }
 
+/// Build a bounded `mailto:` URI from the portal's typed compose options.
 fn mailto_uri(options: &HashMap<String, OwnedValue>) -> zbus::fdo::Result<String> {
     let mut to = Vec::new();
     if let Some(address) = option_string(options, "address")? {
@@ -92,6 +99,7 @@ fn mailto_uri(options: &HashMap<String, OwnedValue>) -> zbus::fdo::Result<String
     Ok(uri)
 }
 
+/// Read an optional string option, rejecting values with a different D-Bus type.
 fn option_string<'a>(
     options: &'a HashMap<String, OwnedValue>,
     key: &str,
@@ -108,6 +116,7 @@ fn option_string<'a>(
     }
 }
 
+/// Read an optional string-array option, rejecting arrays with non-string values.
 fn option_strings(
     options: &HashMap<String, OwnedValue>,
     key: &str,
@@ -142,6 +151,7 @@ fn encode_component(value: &str) -> String {
     encode_component_with(value, b"")
 }
 
+/// Percent-encode a URI component while preserving the supplied safe bytes.
 fn encode_component_with(value: &str, extra_safe: &[u8]) -> String {
     let mut encoded = String::with_capacity(value.len());
     for byte in value.bytes() {
