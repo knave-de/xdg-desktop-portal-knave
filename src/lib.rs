@@ -63,6 +63,7 @@
 //! - `org.freedesktop.impl.portal.Screenshot` (v2) - Screen capture to file
 //! - `org.freedesktop.impl.portal.InputCapture` (v2) - Barrier-triggered input capture
 //! - `org.freedesktop.impl.portal.GlobalShortcuts` (v2) - App shortcuts through Villain
+//! - `org.freedesktop.impl.portal.Background` (v2) - Background activity consent and app state
 //!   (session lifecycle and zone geometry are real; barrier enforcement is not
 //!   implemented yet -- see the module docs on [`dbus::InputCaptureInterface`])
 
@@ -242,8 +243,9 @@ impl PortalBackend {
         env::warn_on_legacy_settings();
 
         use dbus::{
-            ClipboardInterface, ClipboardSignal, GlobalShortcutsInterface, InputCaptureInterface,
-            RemoteDesktopInterface, ScreenCastInterface, ScreenshotInterface, SettingsInterface,
+            BackgroundInterface, ClipboardInterface, ClipboardSignal, GlobalShortcutsInterface,
+            InputCaptureInterface, RemoteDesktopInterface, ScreenCastInterface,
+            ScreenshotInterface, SettingsInterface,
         };
 
         // Create clipboard interface with shared pending_writes
@@ -254,10 +256,12 @@ impl PortalBackend {
         let pending_writes = clipboard_iface.pending_writes();
 
         let path = "/org/freedesktop/portal/desktop";
+        let background_iface = BackgroundInterface::new();
         let global_shortcuts = GlobalShortcutsInterface::new();
         let mut builder = zbus::connection::Builder::session()?
             .name("org.freedesktop.impl.portal.desktop.knave")?
             .serve_at(path, SettingsInterface::new())?
+            .serve_at(path, background_iface.clone())?
             .serve_at(path, global_shortcuts.clone())?;
         let capture = self.available_protocols.ext_image_copy_capture
             || self.available_protocols.wlr_screencopy;
@@ -316,6 +320,11 @@ impl PortalBackend {
         }
         let connection = builder.build().await?;
 
+        let background_monitor = background_iface.clone();
+        let background_connection = connection.clone();
+        tokio::spawn(async move {
+            background_monitor.monitor(background_connection).await;
+        });
         Self::monitor_global_shortcut_activations(connection.clone());
 
         tracing::info!(
