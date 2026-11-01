@@ -32,6 +32,7 @@ version.
 | `Settings` | v2 | Canonical Knave configuration | Environment / GTK_THEME |
 | `Screenshot` | v2 | Interactive monitor capture to PNG | -- |
 | `GlobalShortcuts` | v2 | Villain desktop shortcut registry | -- |
+| `Background` | v2 | Shell consent dialog and compositor window state | Autostart is unavailable |
 
 Applications register through the standard XDG GlobalShortcuts portal. Knave
 binds requested preferred triggers when they do not collide with compositor
@@ -40,7 +41,15 @@ release their bindings when closed. ConfigureShortcuts opens a Knave Shell dialo
 where users can select an action and assign a key chord; conflicting keys are
 rejected without replacing the current binding.
 
-The shipped descriptor advertises these four interfaces. RemoteDesktop,
+Background requests show a Knave Shell consent dialog with deny, allow, and
+allow-once choices. `GetAppState` reports allowed apps without open windows as
+background, apps with windows as running, and focused apps as active. State for
+apps with no windows is known only after an allow decision in the current portal
+backend process; without a process-liveness source, such entries remain cached
+until denied or the backend restarts. The deprecated `EnableAutostart` method
+returns false.
+
+The shipped descriptor advertises these five interfaces. RemoteDesktop,
 InputCapture, Clipboard, cursor metadata and native color picking
 are not part of the supported Knave integration. PickColor returns NotSupported.
 Without capture protocols the backend serves Settings independently of PipeWire.
@@ -140,6 +149,7 @@ org.freedesktop.impl.portal.ScreenCast=knave
 org.freedesktop.impl.portal.Settings=knave
 org.freedesktop.impl.portal.Screenshot=knave
 org.freedesktop.impl.portal.GlobalShortcuts=knave
+org.freedesktop.impl.portal.Background=knave
 ```
 
 ### Automatic Activation

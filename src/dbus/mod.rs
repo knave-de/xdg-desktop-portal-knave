@@ -7,7 +7,9 @@
 //! - `org.freedesktop.impl.portal.Settings`
 //! - `org.freedesktop.impl.portal.Screenshot`
 //! - `org.freedesktop.impl.portal.InputCapture`
+//! - `org.freedesktop.impl.portal.Background`
 
+mod background;
 mod clipboard;
 mod global_shortcuts;
 mod input_capture;
@@ -20,6 +22,7 @@ mod settings;
 
 use std::collections::HashMap;
 
+pub use background::BackgroundInterface;
 pub use clipboard::{
     ClipboardInterface, ClipboardSignal, PendingWriteEntry, PendingWrites, next_clipboard_serial,
 };
