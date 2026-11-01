@@ -19,10 +19,6 @@ pub struct EmailInterface;
 impl EmailInterface {
     /// Open a compose window in the host's default email application.
     #[zbus(name = "ComposeEmail")]
-    #[expect(
-        clippy::unused_async_trait_impl,
-        reason = "zbus interface requires async"
-    )]
     async fn compose_email(
         &self,
         handle: ObjectPath<'_>,
