@@ -89,7 +89,7 @@ zbus = { version = "5.2", features = ["tokio"] }
 zvariant = "5.2"
 
 # Async runtime
-tokio = { version = "1.35", features = ["full"] }
+tokio = { version = "1.53.3", features = ["full"] }
 
 # EIS protocol (input injection)
 reis = "0.7"
