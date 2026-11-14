@@ -61,7 +61,7 @@ automatically with ext- protocols preferred over wlr- equivalents.
 
 Build dependencies:
 
-- Rust >= 1.87
+- Rust >= 1.88
 - `libpipewire-0.3-dev`
 - `libspa-0.2-dev`
 - `libwayland-dev`
@@ -393,3 +393,7 @@ back this backend and the matching Knave build together.
 
 For isolated smoke checks against a worktree, pass
 `scripts/smoke.py --knave /absolute/worktree/target/debug/knave`.
+
+The backend is distributed as a service executable, not a crates.io package.
+Its private Knave dependencies stay pinned together; CI verifies the release
+workspace build rather than rewriting those dependencies for crates.io.

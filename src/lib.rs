@@ -70,6 +70,10 @@
 
 #![warn(missing_docs)]
 #![warn(clippy::all)]
+#![expect(
+    clippy::collapsible_if,
+    reason = "Keep existing nested protocol control flow when aligning the MSRV with Knave dependencies"
+)]
 #![cfg_attr(docsrs, feature(doc_cfg))]
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used))]
 

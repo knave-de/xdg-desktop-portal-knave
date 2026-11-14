@@ -7,7 +7,7 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
-  MSRV: "1.87"
+  MSRV: "1.88"
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -101,4 +101,5 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y \
             libpipewire-0.3-dev libspa-0.2-dev libwayland-dev libxkbcommon-dev libclang-dev
-      - run: cargo package --workspace --all-features
+      - name: Build distributable service binaries
+        run: cargo build --workspace --release --all-features --locked
