@@ -234,7 +234,7 @@ impl GlobalShortcutsInterface {
             return Err("shortcut assignment request exceeds budget".into());
         }
         let mut child = Command::new(crate::picker::shell_binary())
-            .arg("shortcut-assignment")
+            .args(["--internal", "shell", "shortcut-assignment"])
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::inherit())

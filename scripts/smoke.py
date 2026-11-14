@@ -13,12 +13,14 @@ REPO = Path(__file__).resolve().parent.parent
 ROOT = REPO.parent
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument('--release', action='store_true')
+parser.add_argument('--knave', type=Path, help='coordinated single Knave executable')
 parser.add_argument('--native', action='store_true', help='requires manual source selection and confirmation')
 parser.add_argument('--render', action='store_true', help='render the native picker without clicking')
 parser.add_argument('--installed', action='store_true', help='verify installed D-Bus activation on the private test bus')
 parser.add_argument('--bus', action='store_true', help=argparse.SUPPRESS)
 args = parser.parse_args()
 profile = 'release' if args.release else 'debug'
+knave = (args.knave or ROOT / 'knave/target' / profile / 'knave').resolve()
 example = REPO / 'target' / profile / 'examples/knave_smoke'
 children = []
 runtime = Path(os.environ['XDG_RUNTIME_DIR']) if args.bus else Path(tempfile.mkdtemp(prefix='knave-portal-smoke-'))
@@ -215,13 +217,13 @@ try:
         env.update(XDG_RUNTIME_DIR=str(runtime), XDG_CONFIG_HOME=str(runtime / 'config'),
             XDG_DATA_HOME=str(runtime / 'data'), XDG_CACHE_HOME=str(runtime / 'cache'),
             XDG_DATA_DIRS=str(runtime / 'data') + ':/usr/share', WAYLAND_DISPLAY=str(host),
-            XDG_CURRENT_DESKTOP='Knave', XDP_KNAVE_SHELL_BINARY=str(ROOT / 'knaveshell/target' / profile / 'knave-shell'))
+            XDG_CURRENT_DESKTOP='Knave', XDP_KNAVE_SHELL_BINARY=str(knave))
         # Do not inherit test overrides from a normal desktop.
         env.pop('XDP_KNAVE_SOURCE_PICKER', None)
         env.pop('XDP_GENERIC_SOURCE_PICKER', None)
         pw = spawn(['pipewire'], 'pipewire')
         wait_for(lambda: (runtime / 'pipewire-0').exists(), pw)
-        compositor = spawn([str(ROOT / 'villain/target' / profile / 'villain'), '--winit'], 'villain')
+        compositor = spawn([str(knave), '--internal', 'compositor', '--winit'], 'villain')
         wait_for(lambda: any(runtime.glob('wayland-*')) and any(p.is_socket() for p in runtime.glob('wayland-*')), compositor)
         env['KNAVE_SMOKE_COMPOSITOR_PID'] = str(compositor.pid)
         env['WAYLAND_DISPLAY'] = next(p.name for p in runtime.glob('wayland-*') if p.is_socket())
@@ -234,7 +236,7 @@ try:
                 'description': 'Native monitor selection', 'width': 1904, 'height': 982,
                 'kind': {'type': 'monitor'},
                 'preview_png': None}]}
-            picker = spawn([env['XDP_KNAVE_SHELL_BINARY'], 'portal-picker'], 'picker', stdin=subprocess.PIPE)
+            picker = spawn([env['XDP_KNAVE_SHELL_BINARY'], '--internal', 'shell', 'portal-picker'], 'picker', stdin=subprocess.PIPE)
             picker.stdin.write(json.dumps(request).encode())
             picker.stdin.close()
             time.sleep(8)
@@ -262,7 +264,7 @@ try:
                 picker.write_text("#!/bin/sh\nawk -F '\\t' 'NR==1 { print $1; exit }'\n")
                 picker.chmod(0o700)
                 env['XDP_KNAVE_SOURCE_PICKER'] = str(picker)
-            command = ['dbus-run-session', '--', 'python3', str(Path(__file__).resolve()), '--bus']
+            command = ['dbus-run-session', '--', 'python3', str(Path(__file__).resolve()), '--bus', '--knave', str(knave)]
             if args.release:
                 command.append('--release')
             if args.native:

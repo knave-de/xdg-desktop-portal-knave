@@ -19,8 +19,8 @@ pub(crate) static DIALOG: Semaphore = Semaphore::const_new(1);
 pub(crate) fn shell_binary() -> String {
     crate::env::var("SHELL_BINARY").unwrap_or_else(|_| {
         std::env::var("HOME").map_or_else(
-            |_| "knave-shell".into(),
-            |home| format!("{home}/.local/bin/knave-shell"),
+            |_| "knave".into(),
+            |home| format!("{home}/.local/bin/knave"),
         )
     })
 }
@@ -108,7 +108,7 @@ async fn invoke(
         command
     } else {
         let mut command = Command::new(shell_binary());
-        command.arg("portal-picker");
+        command.args(["--internal", "shell", "portal-picker"]);
         command
     };
     let mut child = command

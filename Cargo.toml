@@ -71,10 +71,10 @@ targets = ["x86_64-unknown-linux-gnu"]
 rustdoc-args = ["--cfg", "docsrs"]
 
 [dependencies]
-knave-capture-protocol = { git = "https://github.com/knave-de/knave.git", rev = "499584e2e68ddc4527157ca69d0c0c7d711e8daf", features = ["client"] }
-knave-config = { git = "https://github.com/knave-de/knave.git", rev = "c56a2b811e29d611e52965c1725629d1f28bb91e" }
-knave-portal-api = { git = "https://github.com/knave-de/knave.git", rev = "ceebf28090600d0d4112ac16941276c9efc07e6e" }
-knave-desktop-api = { git = "https://github.com/knave-de/knave.git", rev = "36c321360b9891b9d0dfafac8fdbb580bc220c8c" }
+knave-capture-protocol = { git = "https://github.com/knave-de/knave.git", rev = "45ce6456b3b1dafd9b8ccaf43281a3fac51f905d", features = ["client"] }
+knave-config = { git = "https://github.com/knave-de/knave.git", rev = "45ce6456b3b1dafd9b8ccaf43281a3fac51f905d" }
+knave-portal-api = { git = "https://github.com/knave-de/knave.git", rev = "45ce6456b3b1dafd9b8ccaf43281a3fac51f905d" }
+knave-desktop-api = { git = "https://github.com/knave-de/knave.git", rev = "45ce6456b3b1dafd9b8ccaf43281a3fac51f905d" }
 serde_json = "1"
 tempfile = "3.8"
 base64 = "0.22"
