@@ -18,6 +18,9 @@ must_use_candidate = "allow"
 doc_markdown = "allow"
 similar_names = "allow"
 items_after_statements = "allow"
+# Keep existing protocol control flow; the shared dependency MSRV bump does not
+# require a repository-wide rewrite of nested conditions into let chains.
+collapsible_if = "allow"
 missing_panics_doc = "allow"
 unused_async = "allow"
 struct_excessive_bools = "allow"
@@ -39,9 +42,10 @@ expect_used = "warn"
 
 [package]
 name = "xdg-desktop-portal-knave"
+publish = false
 version = "0.0.1"
 edition = "2024"
-rust-version = "1.87"
+rust-version = "1.88"
 license = "MIT OR Apache-2.0"
 description = "XDG Desktop Portal backend for Knave Desktop on Wayland"
 repository = "https://github.com/knave-de/xdg-desktop-portal-knave"
@@ -71,10 +75,10 @@ targets = ["x86_64-unknown-linux-gnu"]
 rustdoc-args = ["--cfg", "docsrs"]
 
 [dependencies]
-knave-capture-protocol = { git = "https://github.com/knave-de/knave.git", rev = "499584e2e68ddc4527157ca69d0c0c7d711e8daf", features = ["client"] }
-knave-config = { git = "https://github.com/knave-de/knave.git", rev = "c56a2b811e29d611e52965c1725629d1f28bb91e" }
-knave-portal-api = { git = "https://github.com/knave-de/knave.git", rev = "ceebf28090600d0d4112ac16941276c9efc07e6e" }
-knave-desktop-api = { git = "https://github.com/knave-de/knave.git", rev = "36c321360b9891b9d0dfafac8fdbb580bc220c8c" }
+knave-capture-protocol = { git = "https://github.com/knave-de/knave.git", rev = "dafd9bd4a86c85ec22e9b579f25f828f16d84c10", features = ["client"] }
+knave-config = { git = "https://github.com/knave-de/knave.git", rev = "dafd9bd4a86c85ec22e9b579f25f828f16d84c10" }
+knave-portal-api = { git = "https://github.com/knave-de/knave.git", rev = "dafd9bd4a86c85ec22e9b579f25f828f16d84c10" }
+knave-desktop-api = { git = "https://github.com/knave-de/knave.git", rev = "dafd9bd4a86c85ec22e9b579f25f828f16d84c10" }
 serde_json = "1"
 tempfile = "3.8"
 base64 = "0.22"
@@ -85,7 +89,7 @@ zbus = { version = "5.2", features = ["tokio"] }
 zvariant = "5.2"
 
 # Async runtime
-tokio = { version = "1.35", features = ["full"] }
+tokio = { version = "1.53.3", features = ["full"] }
 
 # EIS protocol (input injection)
 reis = "0.7"

@@ -200,7 +200,7 @@ impl BackgroundInterface {
             return Err("background request exceeds budget".into());
         }
         let mut child = Command::new(shell_binary())
-            .arg("background-permission")
+            .args(["--internal", "shell", "background-permission"])
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::inherit())

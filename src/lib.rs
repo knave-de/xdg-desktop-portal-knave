@@ -70,6 +70,10 @@
 
 #![warn(missing_docs)]
 #![warn(clippy::all)]
+#![expect(
+    clippy::collapsible_if,
+    reason = "Keep existing nested protocol control flow when aligning the MSRV with Knave dependencies"
+)]
 #![cfg_attr(docsrs, feature(doc_cfg))]
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used))]
 
@@ -1038,7 +1042,14 @@ impl PortalBackend {
                     | AddWatchFlags::IN_MOVED_TO
                     | AddWatchFlags::IN_DELETE,
             )?;
-            Ok((tokio::io::unix::AsyncFd::new(Watch(notify))?, path))
+            // SAFETY: Watch exclusively owns the inotify descriptor. It is never
+            // closed or replaced before AsyncFd deregisters and drops its inner value.
+            #[expect(
+                unsafe_code,
+                reason = "Owned inotify descriptor remains valid while registered"
+            )]
+            let notify = unsafe { tokio::io::unix::AsyncFd::register(Watch(notify))? };
+            Ok((notify, path))
         };
         let (notify, path) = match setup() {
             Ok(value) => value,

@@ -10,6 +10,12 @@ ignore = [
     # 0.41 (which carries the fix); revisit when wayland-rs bumps it upstream.
     "RUSTSEC-2026-0194",
     "RUSTSEC-2026-0195",
+    # Maintenance-only notices for the existing zbus 5 stack: these crates moved
+    # into zbus 6. A D-Bus major-version migration is separate from executable
+    # consolidation. Keep vulnerability/unsoundness advisories enforced.
+    "RUSTSEC-2026-0370",
+    "RUSTSEC-2026-0371",
+    "RUSTSEC-2026-0372",
 ]
 
 [licenses]

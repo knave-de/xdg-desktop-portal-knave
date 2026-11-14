@@ -61,7 +61,7 @@ automatically with ext- protocols preferred over wlr- equivalents.
 
 Build dependencies:
 
-- Rust >= 1.87
+- Rust >= 1.88
 - `libpipewire-0.3-dev`
 - `libspa-0.2-dev`
 - `libwayland-dev`
@@ -219,7 +219,7 @@ unset; Knave-prefixed values take precedence.
 
 #### Picker protocol
 
-The native command is `knave-shell portal-picker`. It reads one JSON request on
+The native command is `knave --internal shell portal-picker`. It reads one JSON request on
 stdin and returns one JSON reply on stdout. The `knave-portal-api` crate defines
 and validates this private contract. Requests are limited to 64 sources and 2 MiB,
 replies to 4 KiB, with one consent dialog at a time and a 120-second consent deadline. Sharing controls live until session close.
@@ -382,3 +382,22 @@ Licensed under either of:
 - Apache License, Version 2.0 ([LICENSE-APACHE](LICENSE-APACHE))
 
 at your option.
+
+The coordinated Knave build ships one `knave` executable. Native consent,
+background-permission, and shortcut-assignment UI processes use its private
+`--internal shell` modes. `XDP_KNAVE_SHELL_BINARY` selects that executable for
+isolated builds; its default is `~/.local/bin/knave`. Internal desktop messages
+are coordinated-build implementation details, not a public desktop API. The
+backend's standard XDG portal D-Bus interfaces are unchanged. Deploy or roll
+back this backend and the matching Knave build together.
+
+For isolated smoke checks against a worktree, pass
+`scripts/smoke.py --knave /absolute/worktree/target/debug/knave`.
+
+The backend is distributed as a service executable, not a crates.io package.
+Its private Knave dependencies stay pinned together; CI verifies the release
+workspace build rather than rewriting those dependencies for crates.io.
+
+For worktree sharing checks, `scripts/sharing-fixture.py --run RUN` selects the
+Knave executable from the harness manifest and the backend from this checkout.
+Use `--knave /absolute/path/to/knave` to select it explicitly.
