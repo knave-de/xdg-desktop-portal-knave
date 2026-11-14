@@ -397,3 +397,7 @@ For isolated smoke checks against a worktree, pass
 The backend is distributed as a service executable, not a crates.io package.
 Its private Knave dependencies stay pinned together; CI verifies the release
 workspace build rather than rewriting those dependencies for crates.io.
+
+For worktree sharing checks, `scripts/sharing-fixture.py --run RUN` selects the
+Knave executable from the harness manifest and the backend from this checkout.
+Use `--knave /absolute/path/to/knave` to select it explicitly.
