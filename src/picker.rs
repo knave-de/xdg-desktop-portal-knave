@@ -108,7 +108,7 @@ async fn invoke(
         command
     } else {
         let mut command = Command::new(shell_binary());
-        command.arg("portal-picker");
+        command.args(["--internal", "shell", "portal-picker"]);
         command
     };
     let mut child = command
